@@ -44,7 +44,7 @@ public class MainHook implements IXposedHookLoadPackage {
     static String FAKE_BSSID = "aa:bb:cc:dd:ee:ff";        // AP 的 MAC
     static int    FAKE_RSSI  = -45;                        // 信号强度 dBm
     static String FAKE_CAPS  = "[WPA2-PSK-CCMP][ESS]";     // 加密能力串
-    static boolean FAKE_ON   = true;                       // 总开关
+    static boolean FAKE_ON   = false;                      // 总开关：默认关闭，界面打开才注入
     // ==========================================================================
 
     static XSharedPreferences prefs;
@@ -59,7 +59,7 @@ public class MainHook implements IXposedHookLoadPackage {
         FAKE_BSSID = prefs.getString("bssid", FAKE_BSSID);
         FAKE_RSSI  = (int) parseD(prefs.getString("rssi",  "-45"), FAKE_RSSI);
         FAKE_CAPS  = prefs.getString("caps",  FAKE_CAPS);
-        FAKE_ON    = Boolean.parseBoolean(prefs.getString("enabled", "true"));
+        FAKE_ON    = prefs.getString("enabled", "false").equals("true");
     }
 
     private static double parseD(String s, double def) {
