@@ -38,8 +38,28 @@ public class MapPickerActivity extends Activity {
             ws.setBlockNetworkLoads(false);
             ws.setLoadsImagesAutomatically(true);
             ws.setJavaScriptCanOpenWindowsAutomatically(true);
-            ws.setCacheMode(android.webkit.WebSettings.LOAD_DEFAULT);
+            ws.setCacheMode(android.webkit.WebSettings.LOAD_NO_CACHE);
             web.addJavascriptInterface(new Bridge(), "Android");
+
+            // 诊断：页面标题实时显示加载状态，失败给出原因而不是灰着
+            final android.app.Activity act = this;
+            web.setWebChromeClient(new android.webkit.WebChromeClient() {
+                @Override
+                public void onProgressChanged(android.webkit.WebView view, int newProgress) {
+                    if (newProgress < 100) {
+                        view.loadUrl("javascript:document.getElementById('bar')&&" +
+                                "(document.getElementById('bar').textContent='加载中… '+" + newProgress + "%);");
+                    }
+                }
+            });
+            web.setWebViewClient(new android.webkit.WebViewClient() {
+                @Override
+                public void onReceivedError(android.webkit.WebView view, int errorCode,
+                                            String description, String failingUrl) {
+                    Toast.makeText(act, "页面加载失败: " + description, Toast.LENGTH_LONG).show();
+                }
+            });
+
             fl.addView(web, new android.widget.FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
