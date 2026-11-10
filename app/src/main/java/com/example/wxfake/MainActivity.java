@@ -94,7 +94,7 @@ public class MainActivity extends Activity {
         Switch sw = new Switch(this);
         sw.setText("启用伪造");
         sw.setTextSize(16);
-        sw.setChecked(sp.getString("enabled", "true").equals("true"));
+        sw.setChecked(sp.getString("enabled", "false").equals("true"));
         sw.setOnCheckedChangeListener((btn, checked) -> {
             sp.edit().putString("enabled", checked ? "true" : "false").apply();
             Toast.makeText(this, checked ? "已开启 ✅ 下一次定位请求生效" : "已关闭 ❌ 恢复真实数据",
@@ -216,12 +216,13 @@ public class MainActivity extends Activity {
     // ================= 当前生效状态卡 =================
     private void refreshCurInfo() {
         if (curInfo == null || sp == null) return;
-        boolean on = sp.getString("enabled", "true").equals("true");
+        boolean on = sp.getString("enabled", "false").equals("true");
         curInfo.setText("【当前生效（微信读到）】\n"
-                + "总开关: " + (on ? "✅ 开启" : "❌ 关闭（透传真实）") + "\n"
-                + "位置: " + sp.getString("lat", "-") + ", " + sp.getString("lng", "-") + "\n"
-                + "名称: " + sp.getString("addr", "-") + "\n"
-                + "WiFi: " + sp.getString("ssid", "-") + "  (" + sp.getString("bssid", "-") + ")");
+                + "总开关: " + (on ? "✅ 开启（伪造注入中）" : "⛔ 关闭（微信读到真实位置/WiFi）") + "\n"
+                + "待命位置: " + sp.getString("lat", "-") + ", " + sp.getString("lng", "-") + "\n"
+                + "待命名称: " + sp.getString("addr", "-") + "\n"
+                + "待命WiFi: " + sp.getString("ssid", "-") + "  (" + sp.getString("bssid", "-") + ")"
+                + (on ? "" : "\n\n提示：打开顶部「启用伪造」开关后，上方待命值才会注入微信。"));
     }
 
     // ================= 工具 =================
@@ -282,11 +283,14 @@ public class MainActivity extends Activity {
             if (val.isEmpty()) val = DEFS[i];
             ed.putString(KEYS[i], val);
         }
-        ed.putString("enabled", "true");
+        // 只存待命值；开关状态保持用户手动拨的（不再自动开启）
         ed.apply();
         addHistory(inputs[3].getText().toString().trim(), cur(latIdx), cur(lngIdx));
         refreshCurInfo();
-        Toast.makeText(this, "已保存 ✅ 已自动开启伪造，并记入历史位置", Toast.LENGTH_LONG).show();
+        boolean on = sp.getString("enabled", "false").equals("true");
+        Toast.makeText(this, on
+                ? "已保存 ✅ 开关开启中，微信立刻读新值"
+                : "已保存（待命）⛔ 开关是关的——要注入请拨顶部「启用伪造」", Toast.LENGTH_LONG).show();
     }
 
     // ================= 历史位置 =================
