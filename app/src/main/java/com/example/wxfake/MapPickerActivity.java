@@ -32,6 +32,13 @@ public class MapPickerActivity extends Activity {
             android.webkit.WebSettings ws = web.getSettings();
             ws.setJavaScriptEnabled(true);
             ws.setDomStorageEnabled(true);
+            // file:// 页面加载 https 瓦片：放开混合内容与网络图片（灰屏根因）
+            ws.setMixedContentMode(android.webkit.WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
+            ws.setBlockNetworkImage(false);
+            ws.setBlockNetworkLoads(false);
+            ws.setLoadsImagesAutomatically(true);
+            ws.setJavaScriptCanOpenWindowsAutomatically(true);
+            ws.setCacheMode(android.webkit.WebSettings.LOAD_DEFAULT);
             web.addJavascriptInterface(new Bridge(), "Android");
             fl.addView(web, new android.widget.FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
