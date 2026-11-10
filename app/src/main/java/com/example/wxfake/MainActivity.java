@@ -367,7 +367,7 @@ public class MainActivity extends Activity {
     }
 
     // ================= WiFi 列表勾选（历史 + 附近） =================
-    private ArrayList<String[]> runRoot(String cmd) {
+    private ArrayList<String> runRoot(String cmd) {
         ArrayList<String> out = new ArrayList<>();
         try {
             Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
