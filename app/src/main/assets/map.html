@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>选点</title>
+<style>
+  html,body{margin:0;padding:0;height:100%;overflow:hidden;background:#e8ecef;
+    font-family:-apple-system,"Microsoft YaHei",sans-serif;-webkit-user-select:none;user-select:none;}
+  #map{position:absolute;inset:0;touch-action:none;}
+  #map img{position:absolute;pointer-events:none;-webkit-user-drag:none;}
+  /* 中心十字标记 */
+  #pin{position:absolute;left:50%;top:50%;transform:translate(-50%,-92%);z-index:10;pointer-events:none;
+    text-align:center;}
+  #pin .dot{width:14px;height:14px;border-radius:50% 50% 50% 0;background:#e53935;
+    transform:rotate(-45deg);margin:0 auto;box-shadow:0 2px 6px rgba(0,0,0,.4);}
+  #pin .lbl{margin-top:3px;font-size:11px;color:#e53935;background:rgba(255,255,255,.9);
+    border-radius:4px;padding:1px 6px;white-space:nowrap;}
+  /* 顶部坐标条 */
+  #bar{position:absolute;top:0;left:0;right:0;z-index:20;background:rgba(255,255,255,.95);
+    padding:8px 12px;font-size:13px;color:#333;box-shadow:0 1px 4px rgba(0,0,0,.15);}
+  #bar b{color:#e53935;}
+  /* 右下缩放按钮 */
+  #zoom{position:absolute;right:12px;bottom:96px;z-index:20;display:flex;flex-direction:column;gap:10px;}
+  #zoom button{width:46px;height:46px;border-radius:50%;border:none;background:#fff;color:#333;
+    font-size:22px;font-weight:bold;box-shadow:0 2px 8px rgba(0,0,0,.25);}
+  /* 底部按钮 */
+  #foot{position:absolute;left:0;right:0;bottom:0;z-index:20;padding:12px;
+    background:linear-gradient(transparent,rgba(0,0,0,.06));display:flex;gap:10px;}
+  #foot button{flex:1;height:46px;border:none;border-radius:8px;font-size:16px;}
+  #ok{background:#1a73e8;color:#fff;}
+  #back{background:#fff;color:#333;}
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="pin"><div class="dot"></div><div class="lbl">目标位置</div></div>
+<div id="bar">GCJ坐标：<b id="co">--</b><span style="color:#999">（拖动地图，红线对准目标）</span></div>
+<div id="zoom"><button id="zi">＋</button><button id="zo">－</button></div>
+<div id="foot"><button id="back">返回</button><button id="ok">选定此位置</button></div>
+<script>
+// ---------- WGS84 -> GCJ02（高德瓦片是 GCJ-02；输入查询参数按 WGS 处理） ----------
+function wgs2gcj(lat, lng) {
+  var a=6378245.0, ee=0.00669342162296594323;
+  function tL(l){return l<72.004||l>137.8347} function tB(b){return b<0.8293||b>55.8271}
+  function tX(x,y){var r=-100+2*x+3*y+0.2*y*y+0.1*x*y+0.2*Math.sqrt(Math.abs(x));
+    r+=(20*Math.sin(6*x*Math.PI)+20*Math.sin(2*x*Math.PI))*2/3;r+=y>40?0:(y-40)/3*4e-6;return r}
+  function tY(x,y){var r=300+x+2*y+0.1*x*x+0.1*x*y+0.1*Math.sqrt(Math.abs(x));
+    r+=(20*Math.sin(6*x*Math.PI)+20*Math.sin(2*x*Math.PI))*2/3;r+=20*Math.sin(y*Math.PI)*2/3;return r}
+  if (tL(lng)||tB(lat)) return [lat,lng];
+  var dLat=tX(lng-105,lat-35), dLng=tY(lng-105,lat-35);
+  var radLat=lat/180*Math.PI, magic=Math.sin(radLat);
+  magic=1-ee*magic*magic; var sqrtMagic=Math.sqrt(magic);
+  dLat=(dLat*180)/((a*(1-ee))/(magic*sqrtMagic)*Math.PI);
+  dLng=(dLng*180)/(a/sqrtMagic*Math.cos(radLat)*Math.PI);
+  return [lat+dLat, lng+dLng];
+}
+// ---------- 墨卡托工具 ----------
+var PI=Math.PI, D2R=PI/180;
+function ll2px(lat,lng,z){var s=256*Math.pow(2,z);
+  return [ (lng+180)/360*s, (0.5-Math.log(Math.tan(PI/4+lat*D2R/2))/PI)/2*s ];}
+function px2ll(x,y,z){var s=256*Math.pow(2,z);
+  var lng=x/s*360-180, n=PI-2*PI*y/s, lat=180/PI*Math.atan(0.5*(Math.exp(n)-Math.exp(-n)));
+  return [lat,lng];}
+// ---------- 状态 ----------
+var q={}; location.search.slice(1).split('&').forEach(function(p){
+  var kv=p.split('='); q[kv[0]]=decodeURIComponent(kv[1]||''); });
+var gcj=wgs2gcj(parseFloat(q.lat)||31.2304, parseFloat(q.lng)||121.4737);
+var z=16, cx, cy;                       // cx,cy = 当前中心的世界像素坐标
+(function(){var p=ll2px(gcj[0],gcj[1],z); cx=p[0]; cy=p[1];})();
+var map=document.getElementById('map'), co=document.getElementById('co');
+var tiles={};                           // key -> img
+// ---------- 渲染 ----------
+function render(){
+  var w=innerWidth, h=innerHeight;
+  var ox=cx-w/2, oy=cy-h/2;
+  var tx0=Math.floor(ox/256), ty0=Math.floor(oy/256);
+  var tx1=Math.floor((ox+w)/256), ty1=Math.floor((oy+h)/256);
+  var n=Math.pow(2,z), alive={};
+  for(var X=tx0;X<=tx1;X++)for(var Y=ty0;Y<=ty1;Y++){
+    if(Y<0||Y>=n)continue;
+    var wx=((X%n)+n)%n, key=z+'/'+X+'/'+Y; alive[key]=1;
+    var img=tiles[key];
+    if(!img){
+      img=document.createElement('img');
+      img.src='https://webrd0'+(1+((X+Y)&3))+'.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x='+wx+'&y='+Y+'&z='+z;
+      tiles[key]=img; map.appendChild(img);
+    }
+    img.style.left=(X*256-ox)+'px'; img.style.top=(Y*256-oy)+'px';
+  }
+  for(var k in tiles)if(!alive[k]){map.removeChild(tiles[k]);delete tiles[k];}
+  var c=px2ll(cx,cy,z);
+  co.textContent=c[0].toFixed(6)+', '+c[1].toFixed(6);
+}
+// ---------- 拖动（鼠标+触摸统一 pointer） ----------
+var drag=null;
+map.addEventListener('pointerdown',function(e){drag={x:e.clientX,y:e.clientY};map.setPointerCapture(e.pointerId);});
+map.addEventListener('pointermove',function(e){if(!drag)return;
+  cx-=e.clientX-drag.x; cy-=e.clientY-drag.y; drag={x:e.clientX,y:e.clientY}; render();});
+map.addEventListener('pointerup',function(){drag=null;});
+map.addEventListener('wheel',function(e){e.preventDefault();
+  z=e.deltaY<0?Math.min(19,z+1):Math.max(3,z-1);
+  var p=ll2px(px2ll(cx,cy,z)[0],px2ll(cx,cy,z)[1],z);cx=p[0];cy=p[1];render();},{passive:false});
+document.getElementById('zi').onclick=function(){z=Math.min(19,z+1);render();};
+document.getElementById('zo').onclick=function(){z=Math.max(3,z-1);render();};
+document.getElementById('back').onclick=function(){Android.mapPick('','');};
+document.getElementById('ok').onclick=function(){
+  var c=px2ll(cx,cy,z); Android.mapPick(c[0].toFixed(6), c[1].toFixed(6)); };
+addEventListener('resize',render);
+render();
+</script>
+</body>
+</html>
