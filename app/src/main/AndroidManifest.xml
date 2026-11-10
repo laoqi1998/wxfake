@@ -19,7 +19,18 @@
         <meta-data android:name="xposedscope" android:resource="@array/wx_scope" />
         <meta-data android:name="xposedsharedprefs" android:value="true" />
 
-        <!-- 桌面真入口（别名）：隐藏图标 = 停用这个别名，主 activity 保留 -->
+        <!-- 主入口：挂 LAUNCHER（LSPosed ▶️ 按钮靠它拉起）；默认 enabled=false 不上桌面 -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:enabled="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- 桌面图标（别名）：enabled=true 时图标在桌面；隐藏 = 停用这个别名 -->
         <activity-alias
             android:name=".MainAlias"
             android:targetActivity=".MainActivity"
@@ -30,10 +41,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity-alias>
-
-        <activity
-            android:name=".MainActivity"
-            android:exported="true" />
 
         <activity
             android:name=".MapPickerActivity"
