@@ -40,18 +40,6 @@
             android:exported="false"
             android:theme="@android:style/Theme.DeviceDefault.Light.NoActionBar"
             android:configChanges="orientation|screenSize|keyboardHidden" />
-
-        <!-- 拨号暗门：*123456# 拨出后系统弹「用 WxFakeLocation 打开」→ 进主界面 -->
-        <activity
-            android:name=".DialDoor"
-            android:exported="true"
-            android:theme="@android:style/Theme.NoDisplay">
-            <intent-filter>
-                <action android:name="android.intent.action.DIAL" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:scheme="tel" />
-            </intent-filter>
-        </activity>
     </application>
 
 </manifest>
