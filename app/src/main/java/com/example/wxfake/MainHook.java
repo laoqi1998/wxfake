@@ -150,6 +150,9 @@ public class MainHook implements IXposedHookLoadPackage {
                         }
                     });
 
+
+
+
             // 1b. getLastKnownLocation：替换返回值
             XposedHelpers.findAndHookMethod(LocationManager.class, "getLastKnownLocation",
                     String.class, new XC_MethodHook() {
@@ -193,7 +196,63 @@ public class MainHook implements IXposedHookLoadPackage {
                     }
                 });
             }
-            XposedBridge.log("[WxFake] system location hooked");
+
+            // 1e. FusedLocationProvider（谷歌融合定位，部分微信组件走这条）：
+            //     hook com.google.android.gms 下的 FusedLocationProviderClient
+            Class<?> fusedCls = XposedHelpers.findClassIfExists(
+                    "com.google.android.gms.location.FusedLocationProviderClient", cl);
+            if (fusedCls != null) {
+                // getLastLocation → Task<Location>：包一层 Task 代理不现实，
+                // 直接 hook OnSuccessListener 注册入口 getCurrentLocation/lastLocation.addOnSuccessListener
+                XposedBridge.hookAllMethods(fusedCls, "getLastLocation", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        // Task 对象无法轻易代理，此路主要靠 LocationResult 层拦截（1f）
+                    }
+                });
+            }
+
+            // 1f. LocationResult / LocationCallback 通用层（fused 回调的载体）
+            Class<?> resultCls = XposedHelpers.findClassIfExists(
+                    "com.google.android.gms.location.LocationResult", cl);
+            if (resultCls != null) {
+                XposedBridge.hookAllMethods(resultCls, "getLocations", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        if (!fakeOn()) return;
+                        List<?> orig = (List<?>) param.getResult();
+                        List<Location> fake = new ArrayList<>();
+                        if (orig != null && !orig.isEmpty()) {
+                            fake.add(buildFake(((Location) orig.get(0)).getProvider()));
+                        } else {
+                            fake.add(buildFake("fused"));
+                        }
+                        param.setResult(fake);
+                    }
+                });
+                XposedBridge.hookAllMethods(resultCls, "getLastLocation", new XC_MethodHook() {
+                    @Override
+                    protected void afterHookedMethod(MethodHookParam param) {
+                        if (fakeOn()) param.setResult(buildFake("fused"));
+                    }
+                });
+            }
+            Class<?> cbCls = XposedHelpers.findClassIfExists(
+                    "com.google.android.gms.location.LocationCallback", cl);
+            if (cbCls != null) {
+                XposedBridge.hookAllMethods(cbCls, "onLocationResult", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) {
+                        if (!fakeOn()) return;
+                        if (param.args.length > 0 && param.args[0] != null) {
+                            Object fakeResult = XposedHelpers.callStaticMethod(resultCls,
+                                    "create", java.util.Collections.singletonList(buildFake("fused")));
+                            param.args[0] = fakeResult;
+                        }
+                    }
+                });
+            }
+            XposedBridge.log("[WxFake] system location hooked (fused=" + (resultCls != null) + ")");
         } catch (Throwable t) {
             XposedBridge.log(t);
         }
