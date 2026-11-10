@@ -19,11 +19,11 @@ jobs:
         with:
           gradle-version: '8.5'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Accept Android SDK licenses
-        run: yes | sdkmanager --licenses || true
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --list_installed || true
 
       - name: Build debug APK
         run: gradle assembleDebug --no-daemon
