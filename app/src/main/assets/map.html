@@ -84,6 +84,7 @@ function render(){
     if(!img){
       img=document.createElement('img');
       img.src='https://webrd0'+(1+((X+Y)&3))+'.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x='+wx+'&y='+Y+'&z='+z;
+      img.onerror=function(){var t=this;setTimeout(function(){t.src=t.src.replace(/webrd0\d/,'webrd0'+(1+Math.floor(Math.random()*4)));},800);};
       tiles[key]=img; map.appendChild(img);
     }
     img.style.left=(X*256-ox)+'px'; img.style.top=(Y*256-oy)+'px';
@@ -106,6 +107,14 @@ document.getElementById('zo').onclick=function(){z=Math.max(3,z-1);render();};
 document.getElementById('back').onclick=function(){Android.mapPick('','');};
 document.getElementById('ok').onclick=function(){
   var c=px2ll(cx,cy,z); Android.mapPick(c[0].toFixed(6), c[1].toFixed(6)); };
+// 原生「我的位置」按钮入口：WGS84 输入 → 转 GCJ → 平滑居中
+function moveTo(wgsLat, wgsLng){
+  var g=wgs2gcj(wgsLat, wgsLng);
+  var p=ll2px(g[0], g[1], z);
+  cx=p[0]; cy=p[1];
+  if(z<15){ z=16; p=ll2px(g[0], g[1], z); cx=p[0]; cy=p[1]; }
+  render();
+}
 addEventListener('resize',render);
 render();
 </script>
