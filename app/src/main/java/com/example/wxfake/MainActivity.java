@@ -474,31 +474,36 @@ public class MainActivity extends Activity {
     }
 
     // ================= 图标隐藏/显示 =================
+    // 主 activity 自带 LAUNCHER filter 但默认 enabled=false（不上桌面）；
+    // 桌面图标由别名 .MainAlias 提供。隐藏 = 停用别名。
+    // 隐藏后入口：① LSPosed 模块详情页 ▶️ 播放按钮（显式 intent 拉起主 activity）
+    //           ② 通知栏常驻「配置入口」 ③ 设置→应用→打开
+
+    /** 隐藏桌面图标：停用别名 + 启用主 activity（保证 LSPosed ▶️ 可拉起） */
     private void applyIconHidden() {
         try {
             PackageManager pm = getPackageManager();
-            ComponentName alias = new ComponentName(this, "com.example.wxfake.MainAlias");
-            if (pm.getComponentEnabledSetting(alias)
-                    != PackageManager.COMPONENT_ENABLED_STATE_DISABLED) {
-                pm.setComponentEnabledSetting(alias,
-                        PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
-                        PackageManager.DONT_KILL_APP);
-            }
+            pm.setComponentEnabledSetting(new ComponentName(this, "com.example.wxfake.MainAlias"),
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                    PackageManager.DONT_KILL_APP);
+            pm.setComponentEnabledSetting(new ComponentName(this, "com.example.wxfake.MainActivity"),
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP);
         } catch (Throwable t) {
             Toast.makeText(this, "隐藏失败：" + t, Toast.LENGTH_LONG).show();
         }
     }
 
+    /** 恢复桌面图标：启用别名 + 停用主 activity（桌面只显示一个图标） */
     private void applyIconVisible() {
         try {
             PackageManager pm = getPackageManager();
-            ComponentName alias = new ComponentName(this, "com.example.wxfake.MainAlias");
-            if (pm.getComponentEnabledSetting(alias)
-                    != PackageManager.COMPONENT_ENABLED_STATE_ENABLED) {
-                pm.setComponentEnabledSetting(alias,
-                        PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
-                        PackageManager.DONT_KILL_APP);
-            }
+            pm.setComponentEnabledSetting(new ComponentName(this, "com.example.wxfake.MainAlias"),
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP);
+            pm.setComponentEnabledSetting(new ComponentName(this, "com.example.wxfake.MainActivity"),
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                    PackageManager.DONT_KILL_APP);
         } catch (Throwable ignored) {
         }
     }
