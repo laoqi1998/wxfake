@@ -321,8 +321,10 @@ public class MainActivity extends Activity {
         try {
             boolean locSvcOn;
             try {
-                locSvcOn = Settings.Secure.getInt(getContentResolver(),
-                        Settings.Secure.LOCATION_MODE) != Settings.Secure.LOCATION_OFF;
+                android.location.LocationManager lm = (android.location.LocationManager)
+                        getSystemService(Context.LOCATION_SERVICE);
+                locSvcOn = lm != null && (lm.isProviderEnabled(android.location.LocationManager.GPS_PROVIDER)
+                        || lm.isProviderEnabled(android.location.LocationManager.NETWORK_PROVIDER));
             } catch (Throwable t) {
                 locSvcOn = false;
             }
