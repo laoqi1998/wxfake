@@ -1,0 +1,4 @@
+<resources>
+    <string name="app_name">WxFakeLocation</string>
+    <string name="mod_desc">微信小程序定位+WiFi专用伪造</string>
+</resources>
