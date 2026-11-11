@@ -103,7 +103,15 @@ public class MainHook implements IXposedHookLoadPackage {
             p.waitFor();
 
             String xml = sb.toString();
-            if (xml.isEmpty()) { rootFailCount++; return; }
+            if (xml.isEmpty()) {
+                rootFailCount++;
+                if (rootFailCount == 3) {
+                    XposedBridge.log("[WxFake] root cat empty — 微信没拿到root授权？" +
+                            " Magisk→超级用户→允许 com.tencent.mm，或检查模块App设置过root");
+                }
+                return;
+            }
+            rootFailCount = 0;
 
             // 简易 XML 值抽取：<string name="lat">35.10</string>
             String v;
@@ -116,10 +124,22 @@ public class MainHook implements IXposedHookLoadPackage {
             if ((v = xmlVal(xml, "rssi")) != null)  FAKE_RSSI = (int) parseD(v, FAKE_RSSI);
             if ((v = xmlVal(xml, "caps")) != null)  FAKE_CAPS = v;
             if ((v = xmlVal(xml, "enabled")) != null) FAKE_ON = v.equals("true");
+
+            // 成功日志只打一次（避免刷屏），值变化时再打
+            if (!String.valueOf(FAKE_LAT).equals(lastLoggedLat)) {
+                lastLoggedLat = String.valueOf(FAKE_LAT);
+                XposedBridge.log("[WxFake] root config OK: on=" + FAKE_ON + " " + FAKE_ADDR
+                        + " (" + FAKE_LAT + "," + FAKE_LNG + ") wifi=" + FAKE_SSID + "/" + FAKE_BSSID);
+            }
         } catch (Throwable t) {
             rootFailCount++;
+            if (rootFailCount == 3) {
+                XposedBridge.log("[WxFake] root cat exception: " + t);
+            }
         }
     }
+
+    static String lastLoggedLat = "";
 
     private static String xmlVal(String xml, String key) {
         java.util.regex.Matcher m = java.util.regex.Pattern
