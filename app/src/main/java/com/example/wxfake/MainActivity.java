@@ -538,14 +538,45 @@ public class MainActivity extends Activity {
     /**
      * 解码 WifiConfigStore 里的 SSID 值：
      * - "名字"（带引号）→ 去引号
+     * - &quot; 等 XML/HTML 实体 → 还原成 " 等字符（你截图乱码的真因）
      * - 0xE4B8AD...（UTF-8 字节序列，中文WiFi常这样存）→ 解码回中文
      */
     private static String decodeSsidValue(String raw) {
         if (raw == null) return null;
         String s = raw.trim();
+        // 1) 先解 XML 实体（&quot; &amp; &apos; &lt; &gt; &#NN; &#xNN;）
+        if (s.contains("&")) {
+            s = s.replace("&quot;", "\"")
+                    .replace("&apos;", "'")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                    .replace("&#39;", "'")
+                    .replace("&amp;", "&");
+            // 通用数字实体兜底
+            java.util.regex.Matcher me = java.util.regex.Pattern
+                    .compile("&#(x?)([0-9a-fA-F]+);").matcher(s);
+            StringBuilder sb = new StringBuilder();
+            int last = 0;
+            while (me.find()) {
+                sb.append(s, last, me.start());
+                try {
+                    int cp = me.group(1).equalsIgnoreCase("x")
+                            ? Integer.parseInt(me.group(2), 16)
+                            : Integer.parseInt(me.group(2));
+                    sb.append((char) cp);
+                } catch (Throwable ignored) {
+                    sb.append(me.group(0));
+                }
+                last = me.end();
+            }
+            sb.append(s.substring(last));
+            s = sb.toString();
+        }
+        // 2) 去包裹引号
         if (s.startsWith("\"") && s.endsWith("\"") && s.length() >= 2) {
             s = s.substring(1, s.length() - 1);
         }
+        // 3) 0x 十六进制 UTF-8 字节序列 → 中文
         if (s.startsWith("0x") || s.startsWith("0X")) {
             try {
                 String hex = s.substring(2).replace(" ", "");
