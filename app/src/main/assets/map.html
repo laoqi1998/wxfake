@@ -70,6 +70,14 @@ var z=16, cx, cy;                       // cx,cy = 当前中心的世界像素�
 (function(){var p=ll2px(gcj[0],gcj[1],z); cx=p[0]; cy=p[1];})();
 var map=document.getElementById('map'), co=document.getElementById('co');
 var tiles={};                           // key -> img
+// ---------- 瓦片源：多源并发 + 自动切换 ----------
+// src0 高德街道 / src1 腾讯街道（GCJ 坐标系同源兼容）/ src2 高德卫星
+var SRCS=[
+  function(x,y,z){return 'https://webrd0'+(1+(x+y)%4)+'.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x='+x+'&y='+y+'&z='+z;},
+  function(x,y,z){return 'https://map.gtimg.com/realtimerender?z='+z+'&x='+x+'&y='+(-y-1)+'&style=0&type=vector&width=256&height=256';},
+  function(x,y,z){return 'https://wprd0'+(1+(x+y)%4)+'.is.autonavi.com/appmaptile?x='+x+'&y='+y+'&z='+z+'&lang=zh_cn&size=1&scl=1&style=6';}
+];
+var srcIdx=0, failCount=0;
 // ---------- 渲染 ----------
 function render(){
   var w=innerWidth, h=innerHeight;
@@ -83,8 +91,19 @@ function render(){
     var img=tiles[key];
     if(!img){
       img=document.createElement('img');
-      img.src='https://webrd0'+(1+((X+Y)&3))+'.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x='+wx+'&y='+Y+'&z='+z;
-      img.onerror=function(){var t=this;setTimeout(function(){t.src=t.src.replace(/webrd0\d/,'webrd0'+(1+Math.floor(Math.random()*4)));},800);};
+      img.src=SRCS[srcIdx](wx,Y,z);
+      img.onerror=function(){
+        failCount++;
+        // 同源重试 2 次仍失败 → 全局切换下一个瓦片源并清空重画
+        if(this.dataset.retried==='1'){
+          if(failCount>6 && srcIdx<SRCS.length-1){ srcIdx++; failCount=0;
+            for(var k in tiles){map.removeChild(tiles[k]);} tiles={}; render(); }
+          return;
+        }
+        this.dataset.retried='1';
+        var t=this; setTimeout(function(){ t.src=SRCS[srcIdx](+t.dataset.x, +t.dataset.y, z); },600);
+      };
+      img.dataset.x=wx; img.dataset.y=Y;
       tiles[key]=img; map.appendChild(img);
     }
     img.style.left=(X*256-ox)+'px'; img.style.top=(Y*256-oy)+'px';
