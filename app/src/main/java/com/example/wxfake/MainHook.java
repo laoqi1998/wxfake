@@ -294,7 +294,9 @@ public class MainHook implements IXposedHookLoadPackage {
                 return;
             }
 
-            // 启动时类还没加载（懒加载）→ 挂 loadClass 监听，等它出现
+            // 启动时类还没加载（懒加载）→ 挂 loadClass 监听，等「TencentLocationManager」
+            // 这个确切类出现再补挂。旧版 bug：任何 geolocation.* 类都置 done=true，
+            // 若先加载的是别的类（如内部类/异常类），loadClass 目标失败后彻底放弃。
             XposedBridge.log("[WxFake] TencentLocation SDK not loaded yet — watching classloader");
             XposedBridge.hookAllMethods(ClassLoader.class, "loadClass", new XC_MethodHook() {
                 boolean done = false;
@@ -304,19 +306,24 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (done) return;
                     try {
                         String name = (String) param.args[0];
-                        if (name == null || !name.startsWith("com.tencent.map.geolocation.")) return;
+                        if (name == null
+                                || !name.equals("com.tencent.map.geolocation.TencentLocationManager")) {
+                            return;
+                        }
                         Class<?> first = (Class<?>) param.getResult();
                         if (first == null) return;
+                        // 目标类真实出现，才锁定并挂 hook
                         done = true;
 
                         ClassLoader tcl = first.getClassLoader();
-                        Class<?> mgr = tcl.loadClass("com.tencent.map.geolocation.TencentLocationManager");
+                        Class<?> mgr = first;
                         Class<?> lis = tcl.loadClass("com.tencent.map.geolocation.TencentLocationListener");
                         Class<?> loc = tcl.loadClass("com.tencent.map.geolocation.TencentLocation");
                         hookTencentSdkClass(mgr, lis, loc, cl);
                         XposedBridge.log("[WxFake] TencentLocation SDK hooked (deferred catch) ✓");
                     } catch (Throwable t) {
-                        XposedBridge.log("[WxFake] deferred sdk hook failed: " + t);
+                        // 加载失败不置 done，继续等下一次触发
+                        XposedBridge.log("[WxFake] deferred sdk hook retrying: " + t);
                     }
                 }
             });
