@@ -131,13 +131,57 @@ public class MainHook implements IXposedHookLoadPackage {
     //      的桥方法，扫参数文本，命中经纬度/WiFi 特征即替换。
     // ------------------------------------------------------------------
     private void hookJsBridge(final ClassLoader cl) {
-        // 延迟到 appbrand 进程挂（主进程没必要）
-        // 桥方法名随版本漂移 → 用「候选名列表 + findClassIfExists 探测」多路尝试
+        // 类名随微信版本混淆漂移 → 不猜名字，延迟到类加载时按「特征」抓：
+        // 挂 ClassLoader.loadClass，凡是类里声明了 nativeInvokeHandler/publishHandler
+        // 等桥方法的（AppBrand 桥家族特征），在首个实例方法被调用前挂上改写。
+        XposedBridge.log("[WxFake] js bridge watching classloader (name-agnostic)");
+        XposedBridge.hookAllMethods(ClassLoader.class, "loadClass", new XC_MethodHook() {
+            final java.util.Set<String> doneClasses = new java.util.HashSet<>();
+
+            @Override
+            protected void afterHookedMethod(MethodHookParam param) {
+                try {
+                    String name = (String) param.args[0];
+                    if (name == null || name.length() < 5 || name.contains(".")) return; // 只要简单名，跳过全限定名请求
+                    Class<?> c = (Class<?>) param.getResult();
+                    if (c == null || c.getClassLoader() != cl) return;
+
+                    // 已处理过就跳过
+                    if (!doneClasses.add(c.getName())) return;
+
+                    // 找桥特征方法（声明了就算）
+                    boolean isBridge = false;
+                    try {
+                        for (java.lang.reflect.Method m : c.getDeclaredMethods()) {
+                            String mn = m.getName();
+                            if (mn.equals("nativeInvokeHandler") || mn.equals("publishHandler")
+                                    || mn.equals("invokeHandler") || mn.equals("onNativeReceive")) {
+                                isBridge = true;
+                                break;
+                            }
+                        }
+                    } catch (Throwable ignored) {
+                        return;
+                    }
+                    if (!isBridge) return;
+
+                    int n = hookBridgeMethods(c);
+                    if (n > 0) {
+                        XposedBridge.log("[WxFake] js bridge caught: " + c.getName()
+                                + " (methods=" + n + ")");
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        });
+
+        // 同时保留静态候选（老版本可能启动就加载了）
         String[] bridgeClasses = {
                 "com.tencent.mm.appbrand.bridge.AppBrandJsBridgeBridge",
                 "com.tencent.mm.appbrand.e",
                 "com.tencent.mm.plugin.appbrand.jsapi.JsApiBridge",
-                "org.chromium.base.JavaBridge"
+                "org.chromium.base.JavaBridge",
+                "com.tencent.mm.appbrand.common.c"
         };
         int hooked = 0;
         for (String name : bridgeClasses) {
@@ -145,14 +189,7 @@ public class MainHook implements IXposedHookLoadPackage {
             if (c == null) continue;
             hooked += hookBridgeMethods(c);
         }
-        // 另挂 String 返回的通用 JSON 改写（兜底所有版本）
-        try {
-            Class<?> wxBridge = XposedHelpers.findClassIfExists(
-                    "com.tencent.mm.appbrand.common.c", cl);
-            if (wxBridge != null) hooked += hookBridgeMethods(wxBridge);
-        } catch (Throwable ignored) {
-        }
-        XposedBridge.log("[WxFake] js bridge hooked (classes=" + hooked + ")");
+        XposedBridge.log("[WxFake] js bridge static candidates hooked (classes=" + hooked + ")");
     }
 
     private int hookBridgeMethods(final Class<?> c) {
@@ -190,33 +227,47 @@ public class MainHook implements IXposedHookLoadPackage {
         return n[0];
     }
 
-    /** 扫描参数中所有 String，命中坐标/WiFi JSON 特征即改写 */
+    /** 扫描参数中所有 String，命中坐标/WiFi JSON 特征即改写（含无引号键与转义变体） */
     private static void rewriteJsonArgs(XC_MethodHook.MethodHookParam param) {
         if (!fakeOn()) return;
         try {
             for (int i = 0; i < param.args.length; i++) {
                 if (param.args[i] instanceof String) {
                     String s = (String) param.args[i];
-                    if (s.length() < 20) continue;
-                    // 定位结果特征：含 latitude+longitude 键
+                    if (s.length() < 15) continue;
+
+                    String ns = null;
+                    // 定位结果特征：latitude/longitude 键（引号可有可无，兼容转义变体）
                     if (s.contains("latitude") && s.contains("longitude")) {
-                        String ns = s
-                                .replaceAll("\"latitude\"\\s*:\\s*-?[0-9.]+", "\"latitude\":\"" + FAKE_LAT + "\"")
-                                .replaceAll("\"longitude\"\\s*:\\s*-?[0-9.]+", "\"longitude\":\"" + FAKE_LNG + "\"")
-                                .replaceAll("\"accuracy\"\\s*:\\s*-?[0-9.]+", "\"accuracy\":\"" + FAKE_ACC + "\"");
-                        // 逆地理相关字段一并替换（有的接口返回 address）
-                        if (ns.contains("\"address\"")) {
-                            ns = ns.replaceAll("\"address\"\\s*:\\s*\"[^\"]*\"", "\"address\":\"" + FAKE_ADDR + "\"");
-                        }
-                        if (!ns.equals(s)) param.args[i] = ns;
+                        ns = s
+                                .replaceAll("(\\\\?\"latitude\\\\?\"|latitude)\\s*[:=]\\s*\\\"?-?[0-9.]+\\\"?",
+                                        "latitude:" + FAKE_LAT)
+                                .replaceAll("(\\\\?\"longitude\\\\?\"|longitude)\\s*[:=]\\s*\\\"?-?[0-9.]+\\\"?",
+                                        "longitude:" + FAKE_LNG)
+                                .replaceAll("(\\\\?\"accuracy\\\\?\"|accuracy)\\s*[:=]\\s*\\\"?-?[0-9.]+\\\"?",
+                                        "accuracy:" + FAKE_ACC)
+                                .replaceAll("(\\\\?\"address\\\\?\"|address)\\s*[:=]\\s*\\\"[^\\\"]*\\\"?",
+                                        "address:" + FAKE_ADDR);
+                        // 上面宽松替换可能产生非法 JSON（键没引号）——为了稳妥同时产出规范版
+                        String strict = s
+                                .replaceAll("\"latitude\"\\s*:\\s*\\\"?-?[0-9.]+\\\"?", "\"latitude\":" + FAKE_LAT)
+                                .replaceAll("\"longitude\"\\s*:\\s*\\\"?-?[0-9.]+\\\"?", "\"longitude\":" + FAKE_LNG)
+                                .replaceAll("\"accuracy\"\\s*:\\s*\\\"?-?[0-9.]+\\\"?", "\"accuracy\":" + FAKE_ACC)
+                                .replaceAll("\"address\"\\s*:\\s*\"[^\"]*\"", "\"address\":\"" + FAKE_ADDR + "\"");
+                        if (!strict.equals(s)) ns = strict;
                     }
                     // WiFi 结果特征
-                    else if (s.contains("bssid") || s.contains("BSSID")) {
-                        String ns = s
+                    else if (s.contains("BSSID") || s.contains("bssid")) {
+                        String strict = s
                                 .replaceAll("\"SSID\"\\s*:\\s*\"[^\"]*\"", "\"SSID\":\"" + FAKE_SSID + "\"")
                                 .replaceAll("\"BSSID\"\\s*:\\s*\"[^\"]*\"", "\"BSSID\":\"" + FAKE_BSSID + "\"")
-                                .replaceAll("\"signal_strength\"\\s*:\\s*-?[0-9.]+", "\"signal_strength\":\"" + FAKE_RSSI + "\"");
-                        if (!ns.equals(s)) param.args[i] = ns;
+                                .replaceAll("\"signal_strength\"\\s*:\\s*-?[0-9]+", "\"signal_strength\":" + FAKE_RSSI);
+                        if (!strict.equals(s)) ns = strict;
+                    }
+
+                    if (ns != null && !ns.equals(s)) {
+                        param.args[i] = ns;
+                        XposedBridge.log("[WxFake] js bridge rewrote arg[" + i + "] len " + s.length());
                     }
                 }
             }
