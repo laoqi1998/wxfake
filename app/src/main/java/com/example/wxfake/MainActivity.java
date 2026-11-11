@@ -278,12 +278,12 @@ public class MainActivity extends Activity {
     private void refreshCurInfo() {
         if (curInfo == null || sp == null) return;
         boolean on = sp.getString("enabled", "false").equals("true");
-        curInfo.setText("【当前生效（微信读到）】\n"
-                + "总开关: " + (on ? "✅ 开启（伪造注入中）" : "⛔ 关闭（微信读到真实位置/WiFi）") + "\n"
-                + "待命位置: " + sp.getString("lat", "-") + ", " + sp.getString("lng", "-") + "\n"
-                + "待命名称: " + sp.getString("addr", "-") + "\n"
-                + "待命WiFi: " + sp.getString("ssid", "-") + "  (" + sp.getString("bssid", "-") + ")"
-                + (on ? "" : "\n\n提示：打开顶部「启用伪造」开关后，上方待命值才会注入微信。"));
+        curInfo.setText("【待命值（微信下次定位将读到）】\n"
+                + "总开关: " + (on ? "✅ 开启（伪造注入中）" : "⛔ 关闭（微信读到真实数据）") + "\n"
+                + "位置: " + sp.getString("lat", "-") + ", " + sp.getString("lng", "-") + "\n"
+                + "名称: " + sp.getString("addr", "-") + "\n"
+                + "WiFi: " + sp.getString("ssid", "-") + "  (" + sp.getString("bssid", "-") + ")"
+                + (on ? "" : "\n\n提示：打开顶部「启用伪造」开关后，上方值才会注入微信。"));
     }
 
     // ================= 工具 =================
