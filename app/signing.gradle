@@ -1,0 +1,20 @@
+android {
+    signingConfigs {
+        gh {
+            storeFile rootProject.file("keystore.jks")
+            storePassword "wxfake123456"
+            keyAlias "wxfake"
+            keyPassword "wxfake123456"
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.gh
+        }
+        release {
+            signingConfig signingConfigs.gh
+        }
+    }
+}
+
+Commit changes
