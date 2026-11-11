@@ -66,6 +66,7 @@ public class MainActivity extends Activity {
     private final EditText[] inputs = new EditText[KEYS.length];
     private final int latIdx = 0, lngIdx = 1;
     private TextView curInfo;
+    private EditText amapKeyInput, amapSecInput;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -164,6 +165,35 @@ public class MainActivity extends Activity {
         histBtn.setAllCaps(false);
         histBtn.setOnClickListener(v -> showHistoryDialog());
         root.addView(histBtn, matchWrap());
+
+        // ---------- 高德 Key（可选：地图加载更稳） ----------
+        TextView keyLabel = new TextView(this);
+        keyLabel.setText("高德地图 Key（选填：lbs.amap.com 免费申请，JS API 类型。填了地图走官方源更稳，不填走备用瓦片源）");
+        keyLabel.setTextSize(12);
+        keyLabel.setTextColor(0xFF666666);
+        keyLabel.setPadding(0, pad, 0, 4);
+        root.addView(keyLabel);
+
+        amapKeyInput = new EditText(this);
+        amapKeyInput.setText(sp.getString("amap_key", ""));
+        amapKeyInput.setTextSize(13);
+        amapKeyInput.setSingleLine(true);
+        amapKeyInput.setHint("32位Key，选填");
+        root.addView(amapKeyInput);
+
+        TextView keyLabel2 = new TextView(this);
+        keyLabel2.setText("安全密钥 jscode（2021年后的 Key 需要配套，同页面可见；老 Key 留空）");
+        keyLabel2.setTextSize(12);
+        keyLabel2.setTextColor(0xFF666666);
+        keyLabel2.setPadding(0, 4, 0, 4);
+        root.addView(keyLabel2);
+
+        amapSecInput = new EditText(this);
+        amapSecInput.setText(sp.getString("amap_sec", ""));
+        amapSecInput.setTextSize(13);
+        amapSecInput.setSingleLine(true);
+        amapSecInput.setHint("安全密钥，选填");
+        root.addView(amapSecInput);
 
         // ---------- WiFi 区 ----------
         root.addView(sectionLabel("📶 WiFi", pad));
@@ -283,6 +313,9 @@ public class MainActivity extends Activity {
             if (val.isEmpty()) val = DEFS[i];
             ed.putString(KEYS[i], val);
         }
+        // 高德 Key / 安全密钥
+        ed.putString("amap_key", amapKeyInput.getText().toString().trim());
+        ed.putString("amap_sec", amapSecInput.getText().toString().trim());
         // 只存待命值；开关状态保持用户手动拨的（不再自动开启）
         ed.apply();
         addHistory(inputs[3].getText().toString().trim(), cur(latIdx), cur(lngIdx));
@@ -370,18 +403,64 @@ public class MainActivity extends Activity {
     }
 
     // ================= WiFi 列表勾选（历史 + 附近） =================
-    private ArrayList<String> runRoot(String cmd) {
+    /** root 执行结果（含诊断信息） */
+    private static class RootResult {
         ArrayList<String> out = new ArrayList<>();
+        String diag = "";       // 每步诊断
+        boolean suOk = false;   // su 本身是否可用
+    }
+
+    /**
+     * root 执行命令。修复三个坑：
+     * 1) stderr 不读会撑满缓冲区导致 waitFor 永久死锁 → 双流各起线程收
+     * 2) su 挂起无响应 → 8 秒超时强杀
+     * 3) HyperOS 的 su 有时需要 sh -c 包一层
+     */
+    private RootResult runRootD(String cmd) {
+        RootResult rr = new RootResult();
         try {
             Process p = Runtime.getRuntime().exec(new String[]{"su", "-c", cmd});
-            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            final java.io.InputStream es = p.getErrorStream();
+            final java.io.InputStream is = p.getInputStream();
+            final StringBuilder errB = new StringBuilder();
+
+            Thread te = new Thread(() -> {
+                try (BufferedReader r = new BufferedReader(new InputStreamReader(es))) {
+                    String l;
+                    while ((l = r.readLine()) != null) {
+                        synchronized (errB) { errB.append(l).append('\n'); }
+                    }
+                } catch (Throwable ignored) {}
+            });
+            te.start();
+
+            BufferedReader r = new BufferedReader(new InputStreamReader(is));
             String line;
-            while ((line = r.readLine()) != null) out.add(line);
+            while ((line = r.readLine()) != null) rr.out.add(line);
             r.close();
-            p.waitFor();
-        } catch (Throwable ignored) {
+
+            boolean done = false;
+            long deadline = System.currentTimeMillis() + 8000;
+            while (System.currentTimeMillis() < deadline) {
+                try { p.exitValue(); done = true; break; }
+                catch (IllegalThreadStateException e) { Thread.sleep(150); }
+            }
+            if (!done) { p.destroyForcibly(); rr.diag += "超时强杀; "; }
+            te.join(500);
+
+            rr.suOk = true;  // su 进程能起来就认为 root 通道可用
+            synchronized (errB) {
+                if (errB.length() > 0) rr.diag += "stderr[" + errB.toString().trim() + "]";
+            }
+        } catch (Throwable t) {
+            rr.diag += "EXC:" + t;
         }
-        return out;
+        return rr;
+    }
+
+    // 兼容旧调用
+    private ArrayList<String> runRoot(String cmd) {
+        return runRootD(cmd).out;
     }
 
     private static String extractSsid(String line) {
@@ -421,41 +500,35 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {
         }
 
-        // 2) 已保存/历史连接的网络（root，双路：cmd 命令 + WifiConfigStore.xml 文件解析）
-        //    HyperOS 新版上 cmd wifi list-networks 常没输出，故文件解析是主力
+        // 2) 已保存/历史连接的网络（root，四路：cmd 命令 + 三个存储路径）
+        //    诊断串拼进空列表提示，读不到时能看到死在哪一步
         ArrayList<String> savedSsids = new ArrayList<>();
-        try {
-            for (String line : runRoot("cmd wifi list-networks")) {
-                final String ssid = extractSsid(line);
-                if (ssid != null && !ssid.isEmpty()) savedSsids.add(ssid);
-            }
-        } catch (Throwable ignored) {
+        StringBuilder rootDiag = new StringBuilder();
+        RootResult rr1 = runRootD("cmd wifi list-networks");
+        rootDiag.append("cmd:").append(rr1.out.size()).append("行").append(rr1.diag.isEmpty() ? "" : "(" + rr1.diag + ")");
+        for (String line : rr1.out) {
+            final String ssid = extractSsid(line);
+            if (ssid != null && !ssid.isEmpty()) savedSsids.add(ssid);
         }
-        try {
-            for (String line : runRoot("cat /data/misc/apexdata/com.android.wifi/WifiConfigStore.xml")) {
-                // 文件形如 <string name="SSID">"MyWiFi"</string>（含引号），
-                // 还支持 /data/misc/wifi/WifiConfigStore.xml（老路径）
-                java.util.regex.Matcher mm = java.util.regex.Pattern
-                        .compile("<string name=\"SSID\">\"([^\"]+)\"</string>")
-                        .matcher(line);
-                while (mm.find()) {
-                    String s = mm.group(1);
-                    if (s != null && !s.isEmpty() && !s.contains("0x")) savedSsids.add(s);
-                }
+        // WifiConfigStore.xml 可能整文件单行，不能按行读 → 读全部字节再正则
+        for (String[] path : new String[][]{
+                {"cat /data/misc/apexdata/com.android.wifi/WifiConfigStore.xml", "apex"},
+                {"cat /data/misc/apexdata/com.android.wifi/WifiConfigStore2.xml", "apex2"},
+                {"cat /data/misc/wifi/WifiConfigStore.xml", "legacy"}}) {
+            RootResult rr = runRootD(path[0]);
+            String blob = String.join("\n", rr.out);
+            int found = 0;
+            java.util.regex.Matcher mm = java.util.regex.Pattern
+                    .compile("<string name=\"SSID\">(.*?)</string>")
+                    .matcher(blob);
+            while (mm.find()) {
+                String s = mm.group(1);
+                if (s == null) continue;
+                s = s.replaceAll("^\"+|\"+$", "").trim();
+                if (!s.isEmpty() && !s.startsWith("0x")) { savedSsids.add(s); found++; }
             }
-        } catch (Throwable ignored) {
-        }
-        try {
-            for (String line : runRoot("cat /data/misc/wifi/WifiConfigStore.xml")) {
-                java.util.regex.Matcher mm = java.util.regex.Pattern
-                        .compile("<string name=\"SSID\">\"([^\"]+)\"</string>")
-                        .matcher(line);
-                while (mm.find()) {
-                    String s = mm.group(1);
-                    if (s != null && !s.isEmpty() && !s.contains("0x")) savedSsids.add(s);
-                }
-            }
-        } catch (Throwable ignored) {
+            rootDiag.append(" | ").append(path[1]).append(":").append(found).append("个")
+                    .append(rr.out.isEmpty() ? "(0B" + (rr.diag.isEmpty() ? "" : "," + rr.diag) + ")" : "");
         }
         for (String ssid : savedSsids) {
             if (ssid == null || ssid.isEmpty()) continue;
@@ -474,7 +547,11 @@ public class MainActivity extends Activity {
 
         if (rows.isEmpty()) {
             TextView empty = new TextView(this);
-            empty.setText("没读到任何网络。\n· 附近网络：请开 WiFi 和定位服务\n· 历史/已保存：需要给本 App 授权 root（Magisk 弹窗点允许）");
+            empty.setText("没读到任何网络。\n· 附近网络：请开 WiFi 和定位服务\n· 历史网络 root 诊断：\n"
+                    + rootDiag.toString()
+                    + "\n\n若各行都是0：Magisk → 超级用户 → 确认 WxFakeLocation 已允许，\n"
+                    + "且「命名空间切换」设为全局；HyperOS 还需给 root 授权记录里勾「信任该应用」。");
+            empty.setTextSize(13);
             empty.setPadding(pad8 * 2, pad8 * 2, pad8 * 2, pad8 * 2);
             box.addView(empty);
         }
