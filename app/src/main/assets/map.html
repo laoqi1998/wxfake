@@ -35,7 +35,15 @@
 <body>
 <div id="map"></div>
 <div id="pin"><div class="dot"></div><div class="lbl">目标位置</div></div>
-<div id="bar">GCJ坐标：<b id="co">--</b><span style="color:#999">（拖动地图，红线对准目标）</span></div>
+<div id="bar" style="padding-bottom:6px;">
+  <div id="searchRow" style="display:flex;gap:6px;margin-bottom:6px;">
+    <input id="qbox" placeholder="搜索地址，如：北京天安门 / 上海市黄浦区"
+      style="flex:1;height:34px;font-size:13px;padding:0 8px;border:1px solid #ddd;border-radius:6px;outline:none;background:#fff;">
+    <button id="qgo" style="width:52px;height:34px;border:none;border-radius:6px;background:#1a73e8;color:#fff;font-size:13px;">搜索</button>
+  </div>
+  <div id="addrRow" style="font-size:12px;color:#555;min-height:16px;">📍 <span id="addr">加载中…</span></div>
+  <div>GCJ坐标：<b id="co">--</b></div>
+</div>
 <div id="zoom"><button id="zi">＋</button><button id="zo">－</button></div>
 <div id="foot"><button id="back">返回</button><button id="ok">选定此位置</button></div>
 <div id="dbg" style="position:absolute;left:8px;bottom:64px;z-index:20;font-size:11px;color:#888;background:rgba(255,255,255,.8);padding:2px 6px;border-radius:4px;"></div>
@@ -100,6 +108,13 @@ if (AMAP_KEY) {
       amapMap.on('moveend',sync);
       amapMap.on('dragging',sync);
       sync();
+      // 加载官方插件：搜索 + 逆地理
+      AMap.plugin(['AMap.PlaceSearch','AMap.Geocoder','AMap.Geolocation'], function(){
+        window._geo = new AMap.Geocoder({});
+        window._search = new AMap.PlaceSearch({city:'全国', pageSize:1});
+        window._loc = new AMap.Geolocation({enableHighAccuracy:true,timeout:10000});
+        reverseGeocode(gcj[0], gcj[1]);
+      });
     }catch(e){ map.style.display=''; amapReady=false; }
   };
   s.onerror=function(){ amapReady=false; map.style.display=''; };
@@ -110,6 +125,60 @@ function centerGCJ(){
   if(amapReady&&amapMap){var c=amapMap.getCenter();return [c.getLat(),c.getLng()];}
   return px2ll(cx,cy,z);
 }
+// ---------- 逆地理：坐标 → 文字地址（普通人看得懂） ----------
+var _revTimer=null;
+function reverseGeocode(lat,lng){
+  var el=document.getElementById('addr');
+  if(!amapReady||!window._geo){ el.textContent=lat.toFixed(4)+', '+lng.toFixed(4)+' 附近'; return; }
+  clearTimeout(_revTimer);
+  el.textContent='定位地址中…';
+  _revTimer=setTimeout(function(){
+    window._geo.getAddress([lng,lat],function(status,result){
+      if(status==='complete'&&result.regeocode){
+        var a=result.regeocode.formattedAddress||'';
+        var comp=result.regeocode.addressComponent||{};
+        var brief=(comp.province||'')+(comp.city&&comp.city!==comp.province?comp.city:'')+(comp.district||'');
+        el.textContent=a?brief+' · '+a:lat.toFixed(4)+', '+lng.toFixed(4);
+      } else { el.textContent=lat.toFixed(4)+', '+lng.toFixed(4)+' 附近'; }
+    });
+  },400);
+}
+// ---------- 地址搜索：飞过去 ----------
+function doSearch(){
+  var kw=document.getElementById('qbox').value.trim();
+  if(!kw){ return; }
+  if(amapReady&&window._search){
+    document.getElementById('addr').textContent='搜索中…';
+    window._search.search(kw,function(status,result){
+      if(status==='complete'&&result.poiList&&result.poiList.pois&&result.poiList.pois.length){
+        var poi=result.poiList.pois[0];
+        var ll=poi.location;
+        amapMap.setZoomAndCenter(16,[ll.getLng(),ll.getLat()]);
+        document.getElementById('qbox').blur();
+      } else {
+        document.getElementById('addr').textContent='没搜到「'+kw+'」，试试更完整的地址';
+      }
+    });
+  } else if (AMAP_KEY && AMAP_SEC){
+    // SDK 未就绪，退化为 Web 服务 API（同 Key 可用）
+    fetch('https://restapi.amap.com/v3/place/text?key='+encodeURIComponent(AMAP_KEY)
+      +'&keywords='+encodeURIComponent(kw)+'&city=&offset=1&page=1')
+      .then(function(r){return r.json();})
+      .then(function(j){
+        if(j.pois&&j.pois.length){
+          var ll=j.pois[0].location.split(',');
+          moveTo(parseFloat(ll[1]),parseFloat(ll[0]));
+          document.getElementById('qbox').blur();
+        } else {
+          document.getElementById('addr').textContent='没搜到「'+kw+'」';
+        }
+      }).catch(function(){document.getElementById('addr').textContent='搜索失败，检查网络';});
+  } else {
+    document.getElementById('addr').textContent='搜索需要高德Key和安全密钥（回主页填写）';
+  }
+}
+document.getElementById('qgo').onclick=doSearch;
+document.getElementById('qbox').addEventListener('keydown',function(e){if(e.key==='Enter')doSearch();});
 // 自研渲染容器（官方模式建立后隐藏）
 var amapDiv=null;
 function ensureAmapDiv(){ if(!amapDiv){ amapDiv=document.createElement('div');
@@ -157,6 +226,7 @@ function render(){
   for(var k in tiles)if(!alive[k]){map.removeChild(tiles[k]);delete tiles[k];}
   var c=px2ll(cx,cy,z);
   co.textContent=c[0].toFixed(6)+', '+c[1].toFixed(6);
+  if(!amapReady) reverseGeocode(c[0], c[1]);
 }
 // ---------- 拖动（鼠标+触摸统一 pointer） ----------
 var drag=null;
@@ -175,7 +245,11 @@ document.getElementById('zo').onclick=function(){
   z=Math.max(3,z-1);render();};
 document.getElementById('back').onclick=function(){Android.mapPick('','');};
 document.getElementById('ok').onclick=function(){
-  var c=centerGCJ(); Android.mapPick(c[0].toFixed(6), c[1].toFixed(6)); };
+  var c=centerGCJ();
+  var a='';
+  try{ a=document.getElementById('addr').textContent.replace(/^📍 /,'').replace(/^定位地址中…$/,''); }catch(e){}
+  Android.mapPick(c[0].toFixed(6), c[1].toFixed(6), a);
+};
 // 原生「我的位置」按钮入口：WGS84 输入 → 转 GCJ → 居中
 function moveTo(wgsLat, wgsLng){
   var g=wgs2gcj(wgsLat, wgsLng);
