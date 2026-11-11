@@ -272,6 +272,8 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         refreshCurInfo();
+        // 每次回到界面就把配置重新推到系统属性（确保微信随时能读到最新值）
+        pushConfigToSysProps();
     }
 
     // ================= 当前生效状态卡 =================
@@ -361,16 +363,48 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * 把 shared_prefs/config.xml 权限放开（root chmod）。
-     * 这是「微信读不到配置 → 伪造不生效」的根治手段。
+     * ★★ 配置下发给微信的唯一可靠通道：root setprop（系统属性）
+     * 实测 XSharedPreferences 与 su cat 在 HyperOS + 微信进程都被 SELinux 封死，
+     * 只有系统属性（property_service 共享内存）能被微信进程正常读取。
+     * 每次保存/勾选后调用，模块侧 refreshFromSysProps() 1 秒内读到。
+     */
+    private void pushConfigToSysProps() {
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("setprop persist.wxfake.lat '").append(sp.getString("lat", "31.2304")).append("'; ");
+            sb.append("setprop persist.wxfake.lng '").append(sp.getString("lng", "121.4737")).append("'; ");
+            sb.append("setprop persist.wxfake.acc '").append(sp.getString("acc", "15")).append("'; ");
+            sb.append("setprop persist.wxfake.rssi '").append(sp.getString("rssi", "-45")).append("'; ");
+            sb.append("setprop persist.wxfake.addr '").append(esc(sp.getString("addr", ""))).append("'; ");
+            sb.append("setprop persist.wxfake.ssid '").append(esc(sp.getString("ssid", ""))).append("'; ");
+            sb.append("setprop persist.wxfake.bssid '").append(esc(sp.getString("bssid", ""))).append("'; ");
+            sb.append("setprop persist.wxfake.caps '").append(esc(sp.getString("caps", ""))).append("'; ");
+            sb.append("setprop persist.wxfake.en '")
+                    .append("true".equals(sp.getString("enabled", "false")) ? "1" : "0").append("'");
+            runRootD(sb.toString());
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 属性值不允许空格/特殊字符 → URL 编码，模块侧解码 */
+    private static String esc(String s) {
+        try {
+            return java.net.URLEncoder.encode(s == null ? "" : s, "UTF-8");
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /**
+     * 旧方案（SELinux 下无效，保留作兜底）
      */
     private void makeConfigReadable() {
         try {
+            pushConfigToSysProps();   // 主力：写系统属性
             String f = getFilesDir().getParentFile().getAbsolutePath()
                     + "/shared_prefs/config.xml";
-            runRootD("chmod 664 '" + f + "' && chown " + getPackageName() + ":" + getPackageName()
-                    + " '" + f + "' && chmod 671 '" + getFilesDir().getParentFile().getAbsolutePath()
-                    + "/shared_prefs'");
+            runRootD("chmod 664 '" + f + "' && chmod 671 '"
+                    + getFilesDir().getParentFile().getAbsolutePath() + "/shared_prefs'");
         } catch (Throwable ignored) {
         }
     }
