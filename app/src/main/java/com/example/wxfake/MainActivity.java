@@ -421,17 +421,48 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {
         }
 
-        // 2) 已保存/历史连接的网络（root 读取，无真实 BSSID → 用稳定生成 MAC）
+        // 2) 已保存/历史连接的网络（root，双路：cmd 命令 + WifiConfigStore.xml 文件解析）
+        //    HyperOS 新版上 cmd wifi list-networks 常没输出，故文件解析是主力
+        ArrayList<String> savedSsids = new ArrayList<>();
         try {
             for (String line : runRoot("cmd wifi list-networks")) {
                 final String ssid = extractSsid(line);
-                if (ssid == null || ssid.isEmpty()) continue;
-                if (seen.add("saved:" + ssid)) {
-                    rows.add(new String[]{ssid, macFromSsid(ssid), "-50",
-                            "[WPA2-PSK-CCMP][ESS]", "💾 已保存(历史)"});
+                if (ssid != null && !ssid.isEmpty()) savedSsids.add(ssid);
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            for (String line : runRoot("cat /data/misc/apexdata/com.android.wifi/WifiConfigStore.xml")) {
+                // 文件形如 <string name="SSID">"MyWiFi"</string>（含引号），
+                // 还支持 /data/misc/wifi/WifiConfigStore.xml（老路径）
+                java.util.regex.Matcher mm = java.util.regex.Pattern
+                        .compile("<string name=\"SSID\">\"([^\"]+)\"</string>")
+                        .matcher(line);
+                while (mm.find()) {
+                    String s = mm.group(1);
+                    if (s != null && !s.isEmpty() && !s.contains("0x")) savedSsids.add(s);
                 }
             }
         } catch (Throwable ignored) {
+        }
+        try {
+            for (String line : runRoot("cat /data/misc/wifi/WifiConfigStore.xml")) {
+                java.util.regex.Matcher mm = java.util.regex.Pattern
+                        .compile("<string name=\"SSID\">\"([^\"]+)\"</string>")
+                        .matcher(line);
+                while (mm.find()) {
+                    String s = mm.group(1);
+                    if (s != null && !s.isEmpty() && !s.contains("0x")) savedSsids.add(s);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        for (String ssid : savedSsids) {
+            if (ssid == null || ssid.isEmpty()) continue;
+            if (seen.add("saved:" + ssid)) {
+                rows.add(new String[]{ssid, macFromSsid(ssid), "-50",
+                        "[WPA2-PSK-CCMP][ESS]", "💾 已保存(历史)"});
+            }
         }
 
         // 3) 弹窗列表
