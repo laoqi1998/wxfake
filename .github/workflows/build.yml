@@ -8,21 +8,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Restore signing key
-        id: key
+      - name: Restore persistent signing key
+        id: ks
+        uses: actions/cache@v4
+        with:
+          path: keystore.jks
+          key: wxfake-keystore-v1
+
+      - name: Create keystore if missing
         run: |
-          if [ -f keystore.jks ]; then
-            echo "Using committed keystore"
-          else
+          if [ ! -f keystore.jks ]; then
             keytool -genkeypair -v -keystore keystore.jks -alias wxfake \
               -keyalg RSA -keysize 2048 -validity 36500 \
               -storepass wxfake123456 -keypass wxfake123456 \
               -dname "CN=WxFake, OU=Dev, O=Dev, L=City, ST=State, C=CN"
-            git config user.name "sign-bot"
-            git config user.email "sign-bot@users.noreply.github.com"
-            git add keystore.jks
-            git commit -m "chore: persist signing keystore" || true
-            git push
+            echo "created new keystore"
+          else
+            echo "keystore restored from cache"
           fi
 
       - name: Set up JDK 17
@@ -38,27 +40,31 @@ jobs:
 
       - name: Accept Android SDK licenses
         run: |
-          echo "ANDROID_HOME=$ANDROID_HOME"
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager --list_installed || true
 
-      - name: Build signed release APK
-        env:
-          KS_PASS: wxfake123456
+      - name: Build signed APK
         run: |
-          cat > signing.gradle <<'EOF'
-          android.signingConfigs.create("gh") {
-              storeFile rootProject.file("keystore.jks")
-              storePassword "wxfake123456"
-              keyAlias "wxfake"
-              keyPassword "wxfake123456"
-              signingConfig = it
+          cat > app/signing.gradle <<'EOF'
+          android {
+              signingConfigs {
+                  gh {
+                      storeFile rootProject.file("keystore.jks")
+                      storePassword "wxfake123456"
+                      keyAlias "wxfake"
+                      keyPassword "wxfake123456"
+                  }
+              }
+              buildTypes {
+                  debug {
+                      signingConfig signingConfigs.gh
+                  }
+                  release {
+                      signingConfig signingConfigs.gh
+                  }
+              }
           }
-          android.buildTypes.release.signingConfig = android.signingConfigs.gh
-          android.buildTypes.debug.signingConfig = android.signingConfigs.gh
           EOF
-          sed -i 's|^apply plugin|apply from: "signing.gradle"\napply plugin|' app/build.gradle
-          gradle assembleDebug --no-daemon
+          gradle assembleDebug --no-daemon -I app/signing.gradle
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
