@@ -152,12 +152,13 @@ public class MapPickerActivity extends Activity {
 
     class Bridge {
         @android.webkit.JavascriptInterface
-        public void mapPick(final String lat, final String lng) {
+        public void mapPick(final String lat, final String lng, final String addr) {
             runOnUiThread(() -> {
                 Intent data = new Intent();
                 try {
                     data.putExtra("lat", Double.parseDouble(lat));
                     data.putExtra("lng", Double.parseDouble(lng));
+                    data.putExtra("addr", addr == null ? "" : addr);
                     setResult(RESULT_OK, data);
                 } catch (Exception ignored) {
                     setResult(RESULT_CANCELED);
