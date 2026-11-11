@@ -751,18 +751,32 @@ public class MainActivity extends Activity {
         return s == null ? "" : s.replaceAll("^\"+|\"+$", "");
     }
 
-    // ================= 地图回填 + 自动记录 =================
+    // ================= 地图回填 + 自动保存（选定即生效，不再要求手动保存） =================
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == REQ_MAP && resultCode == RESULT_OK && data != null && data.hasExtra("lat")) {
             double lat = data.getDoubleExtra("lat", 0);
             double lng = data.getDoubleExtra("lng", 0);
+            String addr = data.getStringExtra("addr");
             inputs[latIdx].setText(String.valueOf(lat));
             inputs[lngIdx].setText(String.valueOf(lng));
+            if (addr != null && !addr.trim().isEmpty()) {
+                inputs[3].setText(addr.trim());
+            }
+            // 自动保存全部待命值（WiFi 等其余字段维持当前输入框内容）
+            SharedPreferences.Editor ed = sp.edit();
+            for (int i = 0; i < KEYS.length; i++) {
+                String val = inputs[i].getText().toString().trim();
+                if (val.isEmpty()) val = DEFS[i];
+                ed.putString(KEYS[i], val);
+            }
+            ed.putString("amap_key", amapKeyInput.getText().toString().trim());
+            ed.putString("amap_sec", amapSecInput.getText().toString().trim());
+            ed.apply();
             addHistory(inputs[3].getText().toString().trim(), lat, lng);
             refreshCurInfo();
-            Toast.makeText(this, "已填入并记入历史位置，记得点保存", Toast.LENGTH_SHORT).show();
+            Toast.makeText(this, "已选定并保存 ✅ 伪造开着的话微信立刻读到新位置", Toast.LENGTH_LONG).show();
         }
     }
 }
