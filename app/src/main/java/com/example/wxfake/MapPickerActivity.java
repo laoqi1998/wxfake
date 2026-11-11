@@ -4,6 +4,7 @@ import android.Manifest;
 import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.location.Location;
 import android.location.LocationManager;
@@ -78,7 +79,14 @@ public class MapPickerActivity extends Activity {
 
             double lat = getIntent().getDoubleExtra("lat", 31.2304);
             double lng = getIntent().getDoubleExtra("lng", 121.4737);
-            web.loadUrl("file:///android_asset/map.html?lat=" + lat + "&lng=" + lng);
+            // 高德 Key（用户自填）：有则走官方 JS API，无则走备用瓦片源
+            SharedPreferences sp = getSharedPreferences("config", Context.MODE_PRIVATE);
+            String key = sp.getString("amap_key", "");
+            String sec = sp.getString("amap_sec", "");
+            String url = "file:///android_asset/map.html?lat=" + lat + "&lng=" + lng
+                    + "&key=" + java.net.URLEncoder.encode(key, "UTF-8")
+                    + "&sec=" + java.net.URLEncoder.encode(sec, "UTF-8");
+            web.loadUrl(url);
         } catch (Throwable e) {
             Toast.makeText(this, "地图初始化失败：" + e.getMessage(), Toast.LENGTH_LONG).show();
             finish();
