@@ -66,7 +66,6 @@ public class MainActivity extends Activity {
     private final EditText[] inputs = new EditText[KEYS.length];
     private final int latIdx = 0, lngIdx = 1;
     private TextView curInfo;
-    private EditText amapKeyInput, amapSecInput;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -98,6 +97,7 @@ public class MainActivity extends Activity {
         sw.setChecked(sp.getString("enabled", "false").equals("true"));
         sw.setOnCheckedChangeListener((btn, checked) -> {
             sp.edit().putString("enabled", checked ? "true" : "false").apply();
+            makeConfigReadable();   // ★ 开关状态也要让微信读到！
             Toast.makeText(this, checked ? "已开启 ✅ 下一次定位请求生效" : "已关闭 ❌ 恢复真实数据",
                     Toast.LENGTH_SHORT).show();
             refreshCurInfo();
@@ -111,6 +111,7 @@ public class MainActivity extends Activity {
         hide.setChecked(sp.getString("hidden", "false").equals("true"));
         hide.setOnCheckedChangeListener((btn, checked) -> {
             sp.edit().putString("hidden", checked ? "true" : "false").apply();
+            makeConfigReadable();   // 每次写配置后都放开权限
             if (checked) {
                 applyIconHidden();
                 postNotif();
@@ -166,36 +167,7 @@ public class MainActivity extends Activity {
         histBtn.setOnClickListener(v -> showHistoryDialog());
         root.addView(histBtn, matchWrap());
 
-        // ---------- 高德 Key（可选：地图加载更稳） ----------
-        TextView keyLabel = new TextView(this);
-        keyLabel.setText("高德地图 Key（选填：lbs.amap.com 免费申请，JS API 类型。填了地图走官方源更稳，不填走备用瓦片源）");
-        keyLabel.setTextSize(12);
-        keyLabel.setTextColor(0xFF666666);
-        keyLabel.setPadding(0, pad, 0, 4);
-        root.addView(keyLabel);
-
-        amapKeyInput = new EditText(this);
-        amapKeyInput.setText(sp.getString("amap_key", ""));
-        amapKeyInput.setTextSize(13);
-        amapKeyInput.setSingleLine(true);
-        amapKeyInput.setHint("32位Key，选填");
-        root.addView(amapKeyInput);
-
-        TextView keyLabel2 = new TextView(this);
-        keyLabel2.setText("安全密钥 jscode（2021年后的 Key 需要配套，同页面可见；老 Key 留空）");
-        keyLabel2.setTextSize(12);
-        keyLabel2.setTextColor(0xFF666666);
-        keyLabel2.setPadding(0, 4, 0, 4);
-        root.addView(keyLabel2);
-
-        amapSecInput = new EditText(this);
-        amapSecInput.setText(sp.getString("amap_sec", ""));
-        amapSecInput.setTextSize(13);
-        amapSecInput.setSingleLine(true);
-        amapSecInput.setHint("安全密钥，选填");
-        root.addView(amapSecInput);
-
-        // ---------- WiFi 区 ----------
+        // ---------- WiFi 区（勾选/读取后自动保存） ----------
         root.addView(sectionLabel("📶 WiFi", pad));
         for (int i = 4; i < KEYS.length; i++) addInput(root, i, pad);
 
@@ -215,6 +187,13 @@ public class MainActivity extends Activity {
         });
         root.addView(wifiBtn, matchWrap());
 
+        // ---------- 高德 Key 二级页 ----------
+        Button keyBtn = new Button(this);
+        keyBtn.setText("⚙️ 高德地图设置（Key / 安全密钥）");
+        keyBtn.setAllCaps(false);
+        keyBtn.setOnClickListener(v -> showAmapKeyDialog());
+        root.addView(keyBtn, matchWrap());
+
         // ---------- 保存 ----------
         Button save = new Button(this);
         save.setText("保存配置");
@@ -228,13 +207,65 @@ public class MainActivity extends Activity {
         root.addView(save);
 
         TextView foot = new TextView(this);
-        foot.setText("隐藏桌面后：下拉通知点「WxFakeLocation 运行中」即可回来；LSPosed 模块状态不受影响。");
+        foot.setText("WiFi/位置勾选后自动保存并生效；手动改输入框需点「保存配置」。\n"
+                + "隐藏桌面后：下拉通知「WxFakeLocation 运行中」或 LSPosed ▶️ 拉回。");
         foot.setTextSize(12);
         foot.setTextColor(0xFF999999);
         foot.setPadding(0, pad, 0, 0);
         root.addView(foot);
 
         refreshCurInfo();
+    }
+
+    // ================= 高德 Key 二级弹窗 =================
+    private void showAmapKeyDialog() {
+        float d = getResources().getDisplayMetrics().density;
+        int pad = (int) (16 * d);
+
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(pad, pad / 2, pad, 0);
+
+        TextView l1 = new TextView(this);
+        l1.setText("Key（lbs.amap.com 免费申请，服务平台选「Web端(JS API)」）");
+        l1.setTextSize(12);
+        l1.setTextColor(0xFF666666);
+        box.addView(l1);
+
+        final EditText keyIn = new EditText(this);
+        keyIn.setText(sp.getString("amap_key", ""));
+        keyIn.setSingleLine(true);
+        keyIn.setHint("32位Key");
+        keyIn.setTextSize(14);
+        box.addView(keyIn);
+
+        TextView l2 = new TextView(this);
+        l2.setText("安全密钥 jscode（2021年后的 Key 配套，同页可见）");
+        l2.setTextSize(12);
+        l2.setTextColor(0xFF666666);
+        l2.setPadding(0, pad / 2, 0, 0);
+        box.addView(l2);
+
+        final EditText secIn = new EditText(this);
+        secIn.setText(sp.getString("amap_sec", ""));
+        secIn.setSingleLine(true);
+        secIn.setHint("安全密钥");
+        secIn.setTextSize(14);
+        box.addView(secIn);
+
+        new AlertDialog.Builder(this)
+                .setTitle("⚙️ 高德地图设置")
+                .setView(box)
+                .setPositiveButton("保存", (dlg, w) -> {
+                    sp.edit()
+                            .putString("amap_key", keyIn.getText().toString().trim())
+                            .putString("amap_sec", secIn.getText().toString().trim())
+                            .apply();
+                    makeConfigReadable();
+                    Toast.makeText(this, "已保存 ✅ 地图选点将走官方源", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     @Override
@@ -314,16 +345,34 @@ public class MainActivity extends Activity {
             ed.putString(KEYS[i], val);
         }
         // 高德 Key / 安全密钥
-        ed.putString("amap_key", amapKeyInput.getText().toString().trim());
-        ed.putString("amap_sec", amapSecInput.getText().toString().trim());
+        // Key/密钥在二级页保存，此处不再动
         // 只存待命值；开关状态保持用户手动拨的（不再自动开启）
         ed.apply();
+        // ★ 核心修复：配置文件必须世界可读，微信的 XSharedPreferences 才能读到！
+        //   MODE_PRIVATE 建出的文件权限 600，微信读到的永远是空 → 全部回退默认值。
+        //   有 root：chmod 放开（最稳）；无 root：靠 LSPosed 的 xposedsharedprefs 声明。
+        makeConfigReadable();
         addHistory(inputs[3].getText().toString().trim(), cur(latIdx), cur(lngIdx));
         refreshCurInfo();
         boolean on = sp.getString("enabled", "false").equals("true");
         Toast.makeText(this, on
                 ? "已保存 ✅ 开关开启中，微信立刻读新值"
                 : "已保存（待命）⛔ 开关是关的——要注入请拨顶部「启用伪造」", Toast.LENGTH_LONG).show();
+    }
+
+    /**
+     * 把 shared_prefs/config.xml 权限放开（root chmod）。
+     * 这是「微信读不到配置 → 伪造不生效」的根治手段。
+     */
+    private void makeConfigReadable() {
+        try {
+            String f = getFilesDir().getParentFile().getAbsolutePath()
+                    + "/shared_prefs/config.xml";
+            runRootD("chmod 664 '" + f + "' && chown " + getPackageName() + ":" + getPackageName()
+                    + " '" + f + "' && chmod 671 '" + getFilesDir().getParentFile().getAbsolutePath()
+                    + "/shared_prefs'");
+        } catch (Throwable ignored) {
+        }
     }
 
     // ================= 历史位置 =================
@@ -364,6 +413,7 @@ public class MainActivity extends Activity {
         int pad8 = (int) (8 * getResources().getDisplayMetrics().density);
         String curLat = sp.getString("lat", "");
         String curLng = sp.getString("lng", "");
+        final AlertDialog[] holder = new AlertDialog[1];
 
         if (list.isEmpty()) {
             TextView empty = new TextView(this);
@@ -383,16 +433,26 @@ public class MainActivity extends Activity {
                 inputs[latIdx].setText(e[1]);
                 inputs[lngIdx].setText(e[2]);
                 if (e[0].startsWith("位置点")) inputs[3].setText(e[0]);
-                Toast.makeText(this, "已填入，记得点保存", Toast.LENGTH_SHORT).show();
+                // 勾选即保存
+                SharedPreferences.Editor ed = sp.edit();
+                for (int i = 0; i < KEYS.length; i++) {
+                    String val = inputs[i].getText().toString().trim();
+                    if (val.isEmpty()) val = DEFS[i];
+                    ed.putString(KEYS[i], val);
+                }
+                ed.apply();
+                makeConfigReadable();
                 refreshCurInfo();
+                if (holder[0] != null) holder[0].dismiss();
+                Toast.makeText(this, "已切到「" + e[0] + "」并保存 ✅ 开关开着即生效", Toast.LENGTH_LONG).show();
             });
             box.addView(row);
         }
         ScrollView sc = new ScrollView(this);
         sc.addView(box);
 
-        new AlertDialog.Builder(this)
-                .setTitle("历史位置（★当前生效的已高亮）")
+        holder[0] = new AlertDialog.Builder(this)
+                .setTitle("历史位置（✅=当前生效，点即切换）")
                 .setView(sc)
                 .setPositiveButton("关闭", null)
                 .setNeutralButton("清空历史", (dlg, w) -> {
@@ -403,18 +463,20 @@ public class MainActivity extends Activity {
     }
 
     // ================= WiFi 列表勾选（历史 + 附近） =================
-    /** root 执行结果（含诊断信息） */
+    /**
+     * root 执行结果（含诊断信息）
+     */
     private static class RootResult {
         ArrayList<String> out = new ArrayList<>();
-        String diag = "";       // 每步诊断
-        boolean suOk = false;   // su 本身是否可用
+        String diag = "";
+        boolean suOk = false;
     }
 
     /**
      * root 执行命令。修复三个坑：
      * 1) stderr 不读会撑满缓冲区导致 waitFor 永久死锁 → 双流各起线程收
      * 2) su 挂起无响应 → 8 秒超时强杀
-     * 3) HyperOS 的 su 有时需要 sh -c 包一层
+     * 3) 输出按 UTF-8 显式解码（默认字符集在部分 ROM 上不是 UTF-8 → 中文乱码）
      */
     private RootResult runRootD(String cmd) {
         RootResult rr = new RootResult();
@@ -425,7 +487,8 @@ public class MainActivity extends Activity {
             final StringBuilder errB = new StringBuilder();
 
             Thread te = new Thread(() -> {
-                try (BufferedReader r = new BufferedReader(new InputStreamReader(es))) {
+                try (BufferedReader r = new BufferedReader(
+                        new InputStreamReader(es, java.nio.charset.StandardCharsets.UTF_8))) {
                     String l;
                     while ((l = r.readLine()) != null) {
                         synchronized (errB) { errB.append(l).append('\n'); }
@@ -434,7 +497,8 @@ public class MainActivity extends Activity {
             });
             te.start();
 
-            BufferedReader r = new BufferedReader(new InputStreamReader(is));
+            BufferedReader r = new BufferedReader(
+                    new InputStreamReader(is, java.nio.charset.StandardCharsets.UTF_8));
             String line;
             while ((line = r.readLine()) != null) rr.out.add(line);
             r.close();
@@ -448,7 +512,7 @@ public class MainActivity extends Activity {
             if (!done) { p.destroyForcibly(); rr.diag += "超时强杀; "; }
             te.join(500);
 
-            rr.suOk = true;  // su 进程能起来就认为 root 通道可用
+            rr.suOk = true;
             synchronized (errB) {
                 if (errB.length() > 0) rr.diag += "stderr[" + errB.toString().trim() + "]";
             }
@@ -458,7 +522,6 @@ public class MainActivity extends Activity {
         return rr;
     }
 
-    // 兼容旧调用
     private ArrayList<String> runRoot(String cmd) {
         return runRootD(cmd).out;
     }
@@ -470,6 +533,32 @@ public class MainActivity extends Activity {
         int e = line.indexOf('"', s);
         if (e <= s) return null;
         return line.substring(s, e);
+    }
+
+    /**
+     * 解码 WifiConfigStore 里的 SSID 值：
+     * - "名字"（带引号）→ 去引号
+     * - 0xE4B8AD...（UTF-8 字节序列，中文WiFi常这样存）→ 解码回中文
+     */
+    private static String decodeSsidValue(String raw) {
+        if (raw == null) return null;
+        String s = raw.trim();
+        if (s.startsWith("\"") && s.endsWith("\"") && s.length() >= 2) {
+            s = s.substring(1, s.length() - 1);
+        }
+        if (s.startsWith("0x") || s.startsWith("0X")) {
+            try {
+                String hex = s.substring(2).replace(" ", "");
+                byte[] b = new byte[hex.length() / 2];
+                for (int i = 0; i < b.length; i++) {
+                    b[i] = (byte) Integer.parseInt(hex.substring(i * 2, i * 2 + 2), 16);
+                }
+                return new String(b, java.nio.charset.StandardCharsets.UTF_8);
+            } catch (Throwable t) {
+                return null;
+            }
+        }
+        return s.trim();
     }
 
     /** 由 SSID 生成稳定假 MAC（本地管理位 02 开头，同一 SSID 永远同一 MAC，利于一致性） */
@@ -518,14 +607,14 @@ public class MainActivity extends Activity {
             RootResult rr = runRootD(path[0]);
             String blob = String.join("\n", rr.out);
             int found = 0;
+            // SSID 在文件里两种存法：<string name="SSID">"名字"</string>
+            // 中文名可能存成 UTF-8 字节序列 0xE4B8AD... → 都处理
             java.util.regex.Matcher mm = java.util.regex.Pattern
                     .compile("<string name=\"SSID\">(.*?)</string>")
                     .matcher(blob);
             while (mm.find()) {
-                String s = mm.group(1);
-                if (s == null) continue;
-                s = s.replaceAll("^\"+|\"+$", "").trim();
-                if (!s.isEmpty() && !s.startsWith("0x")) { savedSsids.add(s); found++; }
+                String s = decodeSsidValue(mm.group(1));
+                if (s != null && !s.isEmpty()) { savedSsids.add(s); found++; }
             }
             rootDiag.append(" | ").append(path[1]).append(":").append(found).append("个")
                     .append(rr.out.isEmpty() ? "(0B" + (rr.diag.isEmpty() ? "" : "," + rr.diag) + ")" : "");
@@ -569,8 +658,18 @@ public class MainActivity extends Activity {
                 inputs[5].setText(r[1]);
                 if (!"-50".equals(r[2])) inputs[6].setText(r[2]);
                 inputs[7].setText(r[3]);
-                Toast.makeText(this, "已填入「" + r[0] + "」，记得点保存", Toast.LENGTH_SHORT).show();
+                // 勾选即保存（避免忘点保存导致"不生效"）
+                SharedPreferences.Editor ed = sp.edit();
+                for (int i = 0; i < KEYS.length; i++) {
+                    String val = inputs[i].getText().toString().trim();
+                    if (val.isEmpty()) val = DEFS[i];
+                    ed.putString(KEYS[i], val);
+                }
+                ed.apply();
+                makeConfigReadable();
                 refreshCurInfo();
+                dlg.dismiss();
+                Toast.makeText(this, "已选「" + r[0] + "」并保存 ✅ 开关开着即生效", Toast.LENGTH_LONG).show();
             });
             box.addView(row);
         }
@@ -744,7 +843,17 @@ public class MainActivity extends Activity {
         inputs[4].setText(trimQuotes(ssid));
         inputs[5].setText(bssid);
         inputs[6].setText(String.valueOf(rssi));
-        Toast.makeText(this, "已填入当前 WiFi，记得点保存", Toast.LENGTH_SHORT).show();
+        // 勾选即保存
+        SharedPreferences.Editor ed = sp.edit();
+        for (int i = 0; i < KEYS.length; i++) {
+            String val = inputs[i].getText().toString().trim();
+            if (val.isEmpty()) val = DEFS[i];
+            ed.putString(KEYS[i], val);
+        }
+        ed.apply();
+        makeConfigReadable();
+        refreshCurInfo();
+        Toast.makeText(this, "已读取并保存 ✅ 开关开着即生效", Toast.LENGTH_LONG).show();
     }
 
     private static String trimQuotes(String s) {
@@ -771,9 +880,9 @@ public class MainActivity extends Activity {
                 if (val.isEmpty()) val = DEFS[i];
                 ed.putString(KEYS[i], val);
             }
-            ed.putString("amap_key", amapKeyInput.getText().toString().trim());
-            ed.putString("amap_sec", amapSecInput.getText().toString().trim());
+            // Key/密钥在二级页保存，此处不动
             ed.apply();
+            makeConfigReadable();   // ★ 同样必须放开权限，否则微信读不到
             addHistory(inputs[3].getText().toString().trim(), lat, lng);
             refreshCurInfo();
             Toast.makeText(this, "已选定并保存 ✅ 伪造开着的话微信立刻读到新位置", Toast.LENGTH_LONG).show();
