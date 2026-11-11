@@ -37,10 +37,11 @@ import java.util.LinkedHashSet;
 
 /**
  * WxFakeLocation 配置界面。
- * - 总开关：切换立即保存并 chmod 放权，下一次定位请求即生效
- * - 桌面隐藏：图标消失，通知栏/LSPosed ▶️ 双入口可回
- * - 位置：手填 / 地图选点（选定即自动保存）/ 历史位置勾选即生效
- * - WiFi：手填 / 读取当前 / 列表勾选（root 历史四路 + 附近扫描），勾选即保存
+ * - 总开关：切换立即保存，下一次定位请求即生效
+ * - 桌面隐藏：图标消失，通知栏常驻「配置入口」可随时回来；LSPosed 模块状态不受影响
+ * - 当前生效状态卡：实时显示微信此刻读到的伪造内容
+ * - 位置：手填 / 地图选点（含"我的位置"一键定位）/ 历史位置勾选（自动记录）
+ * - WiFi：手填 / 读取当前连接 / 列表勾选（root 读已保存网络 + 扫描附近网络）
  */
 public class MainActivity extends Activity {
 
@@ -58,7 +59,7 @@ public class MainActivity extends Activity {
 
     private static final int REQ_MAP = 100;
     private static final int REQ_PERM = 101;
-    private static final String HIST_KEY = "loc_history";
+    private static final String HIST_KEY = "loc_history";   // 行格式: 名称|纬度|经度
     private static final int HIST_MAX = 30;
 
     private SharedPreferences sp;
@@ -96,7 +97,7 @@ public class MainActivity extends Activity {
         sw.setChecked(sp.getString("enabled", "false").equals("true"));
         sw.setOnCheckedChangeListener((btn, checked) -> {
             sp.edit().putString("enabled", checked ? "true" : "false").apply();
-            makeConfigReadable();
+            makeConfigReadable();   // ★ 开关状态也要让微信读到！
             Toast.makeText(this, checked ? "已开启 ✅ 下一次定位请求生效" : "已关闭 ❌ 恢复真实数据",
                     Toast.LENGTH_SHORT).show();
             refreshCurInfo();
@@ -110,7 +111,7 @@ public class MainActivity extends Activity {
         hide.setChecked(sp.getString("hidden", "false").equals("true"));
         hide.setOnCheckedChangeListener((btn, checked) -> {
             sp.edit().putString("hidden", checked ? "true" : "false").apply();
-            makeConfigReadable();
+            makeConfigReadable();   // 每次写配置后都放开权限
             if (checked) {
                 applyIconHidden();
                 postNotif();
@@ -134,7 +135,7 @@ public class MainActivity extends Activity {
         root.addView(curInfo);
 
         TextView tip = new TextView(this);
-        tip.setText("上方卡片 = 微信此刻实际读到的内容（所有勾选均自动保存）。\n"
+        tip.setText("上方卡片 = 微信此刻实际读到的伪造内容（以「保存配置」为准）。\n"
                 + "开关和坐标改动 1 秒内被微信读到，不用重启微信。");
         tip.setTextSize(12);
         tip.setTextColor(0xFF666666);
@@ -146,7 +147,7 @@ public class MainActivity extends Activity {
         for (int i = 0; i < 4; i++) addInput(root, i, pad);
 
         Button mapBtn = new Button(this);
-        mapBtn.setText("打开地图选点（搜索 / 我的位置 / 地址显示）");
+        mapBtn.setText("打开地图选点（含「我的位置」）");
         mapBtn.setAllCaps(false);
         mapBtn.setOnClickListener(v -> {
             try {
@@ -161,12 +162,12 @@ public class MainActivity extends Activity {
         root.addView(mapBtn, matchWrap());
 
         Button histBtn = new Button(this);
-        histBtn.setText("历史位置（自动记录，点击即切换）");
+        histBtn.setText("历史位置（自动记录，可勾选）");
         histBtn.setAllCaps(false);
         histBtn.setOnClickListener(v -> showHistoryDialog());
         root.addView(histBtn, matchWrap());
 
-        // ---------- WiFi 区 ----------
+        // ---------- WiFi 区（勾选/读取后自动保存） ----------
         root.addView(sectionLabel("📶 WiFi", pad));
         for (int i = 4; i < KEYS.length; i++) addInput(root, i, pad);
 
@@ -193,7 +194,7 @@ public class MainActivity extends Activity {
         keyBtn.setOnClickListener(v -> showAmapKeyDialog());
         root.addView(keyBtn, matchWrap());
 
-        // ---------- 保存（手动改输入框后使用） ----------
+        // ---------- 保存 ----------
         Button save = new Button(this);
         save.setText("保存配置");
         save.setTextSize(16);
@@ -343,8 +344,13 @@ public class MainActivity extends Activity {
             if (val.isEmpty()) val = DEFS[i];
             ed.putString(KEYS[i], val);
         }
+        // 高德 Key / 安全密钥
         // Key/密钥在二级页保存，此处不再动
+        // 只存待命值；开关状态保持用户手动拨的（不再自动开启）
         ed.apply();
+        // ★ 核心修复：配置文件必须世界可读，微信的 XSharedPreferences 才能读到！
+        //   MODE_PRIVATE 建出的文件权限 600，微信读到的永远是空 → 全部回退默认值。
+        //   有 root：chmod 放开（最稳）；无 root：靠 LSPosed 的 xposedsharedprefs 声明。
         makeConfigReadable();
         addHistory(inputs[3].getText().toString().trim(), cur(latIdx), cur(lngIdx));
         refreshCurInfo();
@@ -355,15 +361,16 @@ public class MainActivity extends Activity {
     }
 
     /**
-     * ★ 核心修复：配置文件必须世界可读，微信的 XSharedPreferences 才能读到。
-     * MODE_PRIVATE 写出的文件权限 600，微信读到的永远是空 → 全部回退默认值。
+     * 把 shared_prefs/config.xml 权限放开（root chmod）。
+     * 这是「微信读不到配置 → 伪造不生效」的根治手段。
      */
     private void makeConfigReadable() {
         try {
             String f = getFilesDir().getParentFile().getAbsolutePath()
                     + "/shared_prefs/config.xml";
-            runRootD("chmod 664 '" + f + "' && chmod 671 '"
-                    + getFilesDir().getParentFile().getAbsolutePath() + "/shared_prefs'");
+            runRootD("chmod 664 '" + f + "' && chown " + getPackageName() + ":" + getPackageName()
+                    + " '" + f + "' && chmod 671 '" + getFilesDir().getParentFile().getAbsolutePath()
+                    + "/shared_prefs'");
         } catch (Throwable ignored) {
         }
     }
@@ -426,6 +433,7 @@ public class MainActivity extends Activity {
                 inputs[latIdx].setText(e[1]);
                 inputs[lngIdx].setText(e[2]);
                 if (e[0].startsWith("位置点")) inputs[3].setText(e[0]);
+                // 勾选即保存
                 SharedPreferences.Editor ed = sp.edit();
                 for (int i = 0; i < KEYS.length; i++) {
                     String val = inputs[i].getText().toString().trim();
@@ -454,13 +462,22 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    // ================= root 执行 =================
+    // ================= WiFi 列表勾选（历史 + 附近） =================
+    /**
+     * root 执行结果（含诊断信息）
+     */
     private static class RootResult {
         ArrayList<String> out = new ArrayList<>();
         String diag = "";
         boolean suOk = false;
     }
 
+    /**
+     * root 执行命令。修复三个坑：
+     * 1) stderr 不读会撑满缓冲区导致 waitFor 永久死锁 → 双流各起线程收
+     * 2) su 挂起无响应 → 8 秒超时强杀
+     * 3) 输出按 UTF-8 显式解码（默认字符集在部分 ROM 上不是 UTF-8 → 中文乱码）
+     */
     private RootResult runRootD(String cmd) {
         RootResult rr = new RootResult();
         try {
@@ -518,7 +535,11 @@ public class MainActivity extends Activity {
         return line.substring(s, e);
     }
 
-    /** 解码 ConfigStore 的 SSID：去引号 / 0xE4B8AD 十六进制转中文 */
+    /**
+     * 解码 WifiConfigStore 里的 SSID 值：
+     * - "名字"（带引号）→ 去引号
+     * - 0xE4B8AD...（UTF-8 字节序列，中文WiFi常这样存）→ 解码回中文
+     */
     private static String decodeSsidValue(String raw) {
         if (raw == null) return null;
         String s = raw.trim();
@@ -540,26 +561,26 @@ public class MainActivity extends Activity {
         return s.trim();
     }
 
-    /** 由 SSID 生成稳定假 MAC（同一 SSID 永远同一 MAC，利于一致性） */
+    /** 由 SSID 生成稳定假 MAC（本地管理位 02 开头，同一 SSID 永远同一 MAC，利于一致性） */
     private static String macFromSsid(String s) {
         int h = s.hashCode();
         return String.format("02:%02x:%02x:%02x:%02x:%02x",
                 (h >>> 24) & 0xFF, (h >>> 16) & 0xFF, (h >>> 8) & 0xFF, h & 0xFF, (s.length() * 31) & 0xFF);
     }
 
-    // ================= WiFi 列表勾选 =================
     private void showWifiPicker() {
-        final ArrayList<String[]> rows = new ArrayList<>();
+        final ArrayList<String[]> rows = new ArrayList<>();  // {ssid, bssid, rssi, caps, tag}
         final LinkedHashSet<String> seen = new LinkedHashSet<>();
 
-        // 1) 附近扫描
+        // 1) 附近扫描到的网络（真实 BSSID）
         try {
             WifiManager wm = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
             if (wm != null) {
                 try { wm.startScan(); } catch (Throwable ignored) {}
                 for (ScanResult sr : wm.getScanResults()) {
                     if (sr.SSID == null || sr.SSID.isEmpty()) continue;
-                    if (seen.add(sr.BSSID)) {
+                    String k = sr.BSSID;
+                    if (seen.add(k)) {
                         rows.add(new String[]{sr.SSID, sr.BSSID, String.valueOf(sr.level),
                                 sr.capabilities == null ? "[WPA2-PSK-CCMP][ESS]" : sr.capabilities, "📡 附近"});
                     }
@@ -568,7 +589,8 @@ public class MainActivity extends Activity {
         } catch (Throwable ignored) {
         }
 
-        // 2) 已保存/历史（root 四路）
+        // 2) 已保存/历史连接的网络（root，四路：cmd 命令 + 三个存储路径）
+        //    诊断串拼进空列表提示，读不到时能看到死在哪一步
         ArrayList<String> savedSsids = new ArrayList<>();
         StringBuilder rootDiag = new StringBuilder();
         RootResult rr1 = runRootD("cmd wifi list-networks");
@@ -577,6 +599,7 @@ public class MainActivity extends Activity {
             final String ssid = extractSsid(line);
             if (ssid != null && !ssid.isEmpty()) savedSsids.add(ssid);
         }
+        // WifiConfigStore.xml 可能整文件单行，不能按行读 → 读全部字节再正则
         for (String[] path : new String[][]{
                 {"cat /data/misc/apexdata/com.android.wifi/WifiConfigStore.xml", "apex"},
                 {"cat /data/misc/apexdata/com.android.wifi/WifiConfigStore2.xml", "apex2"},
@@ -584,6 +607,8 @@ public class MainActivity extends Activity {
             RootResult rr = runRootD(path[0]);
             String blob = String.join("\n", rr.out);
             int found = 0;
+            // SSID 在文件里两种存法：<string name="SSID">"名字"</string>
+            // 中文名可能存成 UTF-8 字节序列 0xE4B8AD... → 都处理
             java.util.regex.Matcher mm = java.util.regex.Pattern
                     .compile("<string name=\"SSID\">(.*?)</string>")
                     .matcher(blob);
@@ -602,7 +627,7 @@ public class MainActivity extends Activity {
             }
         }
 
-        // 3) 弹窗
+        // 3) 弹窗列表
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
         int pad8 = (int) (8 * getResources().getDisplayMetrics().density);
@@ -613,7 +638,8 @@ public class MainActivity extends Activity {
             TextView empty = new TextView(this);
             empty.setText("没读到任何网络。\n· 附近网络：请开 WiFi 和定位服务\n· 历史网络 root 诊断：\n"
                     + rootDiag.toString()
-                    + "\n\n若各行都是0：Magisk → 超级用户 → 确认 WxFakeLocation 已允许。");
+                    + "\n\n若各行都是0：Magisk → 超级用户 → 确认 WxFakeLocation 已允许，\n"
+                    + "且「命名空间切换」设为全局；HyperOS 还需给 root 授权记录里勾「信任该应用」。");
             empty.setTextSize(13);
             empty.setPadding(pad8 * 2, pad8 * 2, pad8 * 2, pad8 * 2);
             box.addView(empty);
@@ -633,6 +659,7 @@ public class MainActivity extends Activity {
                 inputs[5].setText(r[1]);
                 if (!"-50".equals(r[2])) inputs[6].setText(r[2]);
                 inputs[7].setText(r[3]);
+                // 勾选即保存（避免忘点保存导致"不生效"）
                 SharedPreferences.Editor ed = sp.edit();
                 for (int i = 0; i < KEYS.length; i++) {
                     String val = inputs[i].getText().toString().trim();
@@ -659,6 +686,12 @@ public class MainActivity extends Activity {
     }
 
     // ================= 图标隐藏/显示 =================
+    // 主 activity 自带 LAUNCHER filter 但默认 enabled=false（不上桌面）；
+    // 桌面图标由别名 .MainAlias 提供。隐藏 = 停用别名。
+    // 隐藏后入口：① LSPosed 模块详情页 ▶️ 播放按钮（显式 intent 拉起主 activity）
+    //           ② 通知栏常驻「配置入口」 ③ 设置→应用→打开
+
+    /** 隐藏桌面图标：停用别名 + 启用主 activity（保证 LSPosed ▶️ 可拉起） */
     private void applyIconHidden() {
         try {
             PackageManager pm = getPackageManager();
@@ -673,6 +706,7 @@ public class MainActivity extends Activity {
         }
     }
 
+    /** 恢复桌面图标：启用别名 + 停用主 activity（桌面只显示一个图标） */
     private void applyIconVisible() {
         try {
             PackageManager pm = getPackageManager();
@@ -763,7 +797,8 @@ public class MainActivity extends Activity {
         String ssid = null, bssid = null;
         int rssi = -200;
         try {
-            LocationManager lm = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            android.location.LocationManager lm = (android.location.LocationManager)
+                    getSystemService(Context.LOCATION_SERVICE);
             boolean locSvcOn = lm != null
                     && (lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
                     || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER));
@@ -809,6 +844,7 @@ public class MainActivity extends Activity {
         inputs[4].setText(trimQuotes(ssid));
         inputs[5].setText(bssid);
         inputs[6].setText(String.valueOf(rssi));
+        // 勾选即保存
         SharedPreferences.Editor ed = sp.edit();
         for (int i = 0; i < KEYS.length; i++) {
             String val = inputs[i].getText().toString().trim();
@@ -825,7 +861,7 @@ public class MainActivity extends Activity {
         return s == null ? "" : s.replaceAll("^\"+|\"+$", "");
     }
 
-    // ================= 地图回填 + 自动保存 =================
+    // ================= 地图回填 + 自动保存（选定即生效，不再要求手动保存） =================
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
@@ -838,14 +874,16 @@ public class MainActivity extends Activity {
             if (addr != null && !addr.trim().isEmpty()) {
                 inputs[3].setText(addr.trim());
             }
+            // 自动保存全部待命值（WiFi 等其余字段维持当前输入框内容）
             SharedPreferences.Editor ed = sp.edit();
             for (int i = 0; i < KEYS.length; i++) {
                 String val = inputs[i].getText().toString().trim();
                 if (val.isEmpty()) val = DEFS[i];
                 ed.putString(KEYS[i], val);
             }
+            // Key/密钥在二级页保存，此处不动
             ed.apply();
-            makeConfigReadable();
+            makeConfigReadable();   // ★ 同样必须放开权限，否则微信读不到
             addHistory(inputs[3].getText().toString().trim(), lat, lng);
             refreshCurInfo();
             Toast.makeText(this, "已选定并保存 ✅ 伪造开着的话微信立刻读到新位置", Toast.LENGTH_LONG).show();
