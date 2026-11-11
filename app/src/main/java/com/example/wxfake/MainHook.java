@@ -139,6 +139,61 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
+    /**
+     * ★★ 终极读取通道：android.os.SystemProperties
+     * 前两条路实测全废：
+     *  - XSharedPreferences：SELinux 禁止跨应用访问 /data/data/<pkg>
+     *  - Runtime.exec("su")：微信进程被 SELinux neverallow，error=13
+     * 系统属性走共享内存（property_service），读取对普通应用开放，
+     * 模块 App 侧用 root setprop 写入即可，任何系统都封不掉。
+     */
+    private static String sysProp(String key, String def) {
+        try {
+            Class<?> c = Class.forName("android.os.SystemProperties");
+            java.lang.reflect.Method m = c.getMethod("get", String.class, String.class);
+            Object v = m.invoke(null, key, def);
+            return v == null ? def : (String) v;
+        } catch (Throwable t) {
+            return def;
+        }
+    }
+
+    private static String urlDec(String s) {
+        try {
+            return java.net.URLDecoder.decode(s, "UTF-8");
+        } catch (Throwable t) {
+            return s;
+        }
+    }
+
+    /** 从系统属性读配置（主力通道） */
+    private static boolean refreshFromSysProps() {
+        try {
+            String lat = sysProp("persist.wxfake.lat", "");
+            if (lat == null || lat.isEmpty()) return false;   // 属性未写入
+
+            String v;
+            FAKE_LAT  = parseD(lat, FAKE_LAT);
+            FAKE_LNG  = parseD(sysProp("persist.wxfake.lng", String.valueOf(FAKE_LNG)), FAKE_LNG);
+            FAKE_ACC  = (float) parseD(sysProp("persist.wxfake.acc", String.valueOf(FAKE_ACC)), FAKE_ACC);
+            FAKE_RSSI = (int) parseD(sysProp("persist.wxfake.rssi", String.valueOf(FAKE_RSSI)), FAKE_RSSI);
+            if ((v = sysProp("persist.wxfake.addr", "")) != null && !v.isEmpty())  FAKE_ADDR  = urlDec(v);
+            if ((v = sysProp("persist.wxfake.ssid", "")) != null && !v.isEmpty())  FAKE_SSID  = urlDec(v);
+            if ((v = sysProp("persist.wxfake.bssid", "")) != null && !v.isEmpty()) FAKE_BSSID = urlDec(v);
+            if ((v = sysProp("persist.wxfake.caps", "")) != null && !v.isEmpty())  FAKE_CAPS  = urlDec(v);
+            FAKE_ON = "1".equals(sysProp("persist.wxfake.en", "0"));
+
+            if (!String.valueOf(FAKE_LAT).equals(lastLoggedLat)) {
+                lastLoggedLat = String.valueOf(FAKE_LAT);
+                XposedBridge.log("[WxFake] SYSPROP config OK: on=" + FAKE_ON + " " + FAKE_ADDR
+                        + " (" + FAKE_LAT + "," + FAKE_LNG + ") wifi=" + FAKE_SSID + "/" + FAKE_BSSID);
+            }
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     static String lastLoggedLat = "";
 
     private static String xmlVal(String xml, String key) {
@@ -148,18 +203,20 @@ public class MainHook implements IXposedHookLoadPackage {
         return m.find() ? m.group(1) : null;
     }
 
-    /** 动态开关：每次替换前查询，1 秒节流 —— 先走 root 直读（主力），失败再退 XSharedPreferences */
+    /** 动态开关：每次替换前查询，1 秒节流 —— 系统属性优先，失败退文件/root */
     static boolean fakeOn() {
         long now = SystemClock.elapsedRealtime();
         if (now - lastReload > 1000) {
             lastReload = now;
-            refreshConfigViaRoot();
-            // root 通道连续失败（未授权等）才退回 XSharedPreferences
-            if (rootFailCount > 3 && prefs != null) {
-                try {
-                    prefs.reload();
-                    refreshFields();
-                } catch (Throwable ignored) {
+            if (!refreshFromSysProps()) {
+                // 属性未写入（App 还没保存过）→ 试 root cat，再退 XSharedPreferences
+                refreshConfigViaRoot();
+                if (rootFailCount > 3 && prefs != null) {
+                    try {
+                        prefs.reload();
+                        refreshFields();
+                    } catch (Throwable ignored) {
+                    }
                 }
             }
         }
