@@ -38,6 +38,7 @@
 <div id="bar">GCJ坐标：<b id="co">--</b><span style="color:#999">（拖动地图，红线对准目标）</span></div>
 <div id="zoom"><button id="zi">＋</button><button id="zo">－</button></div>
 <div id="foot"><button id="back">返回</button><button id="ok">选定此位置</button></div>
+<div id="dbg" style="position:absolute;left:8px;bottom:64px;z-index:20;font-size:11px;color:#888;background:rgba(255,255,255,.8);padding:2px 6px;border-radius:4px;"></div>
 <script>
 // ---------- WGS84 -> GCJ02（高德瓦片是 GCJ-02；输入查询参数按 WGS 处理） ----------
 function wgs2gcj(lat, lng) {
@@ -81,11 +82,24 @@ if (AMAP_KEY) {
     try{
       amapMap=new AMap.Map('amap',{zoom:z,center:[gcj[1],gcj[0]],resizeEnable:true,
         doubleClickZoom:true,dragEnable:true,zoomEnable:true});
-      amapMap.add(new AMap.Marker({position:[gcj[1],gcj[0]],title:'目标位置'}));
+      // 跟随中心的选点标记：拖动/缩放时实时移到新中心，红针视觉永不丢
+      window._pinMarker=new AMap.Marker({position:[gcj[1],gcj[0]],
+        content:'<div style="width:14px;height:14px;border-radius:50% 50% 50% 0;background:#e53935;transform:rotate(-45deg);box-shadow:0 2px 6px rgba(0,0,0,.4);margin:0 auto;"></div><div style="margin-top:3px;font-size:11px;color:#e53935;background:rgba(255,255,255,.9);border-radius:4px;padding:1px 6px;white-space:nowrap;text-align:center;">目标位置</div>',
+        anchor:'bottom-center', title:'目标位置'});
+      amapMap.add(window._pinMarker);
       amapReady=true;
       map.style.display='none'; document.getElementById('pin').style.display='none';
-      amapMap.on('moveend',function(){var c=amapMap.getCenter();
-        co.textContent=c.getLat().toFixed(6)+', '+c.getLng().toFixed(6);});
+      // 拖动/缩放中实时把红针钉在屏幕中心 = 你选的位置
+      var sync=function(){
+        var c=amapMap.getCenter();
+        window._pinMarker.setPosition([c.getLng(),c.getLat()]);
+        co.textContent=c.getLat().toFixed(6)+', '+c.getLng().toFixed(6);
+      };
+      amapMap.on('mapmove',sync);
+      amapMap.on('zoomend',sync);
+      amapMap.on('moveend',sync);
+      amapMap.on('dragging',sync);
+      sync();
     }catch(e){ map.style.display=''; amapReady=false; }
   };
   s.onerror=function(){ amapReady=false; map.style.display=''; };
@@ -153,8 +167,12 @@ map.addEventListener('pointerup',function(){drag=null;});
 map.addEventListener('wheel',function(e){e.preventDefault();
   z=e.deltaY<0?Math.min(19,z+1):Math.max(3,z-1);
   var p=ll2px(px2ll(cx,cy,z)[0],px2ll(cx,cy,z)[1],z);cx=p[0];cy=p[1];render();},{passive:false});
-document.getElementById('zi').onclick=function(){z=Math.min(19,z+1);render();};
-document.getElementById('zo').onclick=function(){z=Math.max(3,z-1);render();};
+document.getElementById('zi').onclick=function(){
+  if(amapReady&&amapMap){ amapMap.setZoom(Math.min(19,amapMap.getZoom()+1)); return; }
+  z=Math.min(19,z+1);render();};
+document.getElementById('zo').onclick=function(){
+  if(amapReady&&amapMap){ amapMap.setZoom(Math.max(3,amapMap.getZoom()-1)); return; }
+  z=Math.max(3,z-1);render();};
 document.getElementById('back').onclick=function(){Android.mapPick('','');};
 document.getElementById('ok').onclick=function(){
   var c=centerGCJ(); Android.mapPick(c[0].toFixed(6), c[1].toFixed(6)); };
@@ -169,7 +187,6 @@ function moveTo(wgsLat, wgsLng){
 }
 addEventListener('resize',render);
 if(!AMAP_KEY) render();   // 官方模式时自研层保持隐藏，等 onload 挂 AMap
-</script>
 </script>
 </body>
 </html>
