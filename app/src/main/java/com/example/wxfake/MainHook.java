@@ -27,11 +27,15 @@ import de.robv.android.xposed.XposedHelpers;
 import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 /**
- * WxFakeLocation — 微信小程序 位置 + WiFi 专用伪造模块（带 App 配置界面 + 动态开关）
+ * WxFakeLocation — 微信小程序 位置 + WiFi 专用伪造模块（App 界面配置 + 动态开关）
  *
- * 配置由界面 App 写入 shared_prefs/config.xml，本类通过 XSharedPreferences 读取；
- * 开关/坐标/WiFi 改动后 1 秒内生效（节流 reload），微信无需重启。
- * 开关关闭时所有 hook 透传原始数据，反检测层保持常开。
+ * 关键设计：
+ * - 腾讯定位 SDK 是微信懒加载的：启动时类不存在 → 挂 ClassLoader.loadClass 监听，
+ *   首次加载 geolocation 类时立刻补挂完整 SDK hook（此前版本只试一次就放弃，
+ *   导致「SDK not found」后小程序定位从未被接管 —— 本版核心修复）。
+ * - 监听器替换制：hook 注册入口，把 listener 换成代理，真实回调参数在转发前被替换。
+ * - WiFi 三路 + fused 四层 + 反检测常开。
+ * - 开关/坐标 1 秒热加载，界面改动即时生效。
  */
 public class MainHook implements IXposedHookLoadPackage {
 
@@ -44,7 +48,7 @@ public class MainHook implements IXposedHookLoadPackage {
     static String FAKE_BSSID = "aa:bb:cc:dd:ee:ff";        // AP 的 MAC
     static int    FAKE_RSSI  = -45;                        // 信号强度 dBm
     static String FAKE_CAPS  = "[WPA2-PSK-CCMP][ESS]";     // 加密能力串
-    static boolean FAKE_ON   = false;                      // 总开关：默认关闭，界面打开才注入
+    static boolean FAKE_ON   = false;                      // 总开关：默认关，界面打开才注入
     // ==========================================================================
 
     static XSharedPreferences prefs;
@@ -66,7 +70,6 @@ public class MainHook implements IXposedHookLoadPackage {
         try { return Double.parseDouble(s.trim()); } catch (Throwable t) { return def; }
     }
 
-    /** 首次加载配置（微信进程启动） */
     private static void loadConfig() {
         try {
             prefs = new XSharedPreferences("com.example.wxfake", "config");
@@ -79,7 +82,7 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    /** 动态开关：每次替换前查询，1 秒节流 reload —— 界面改开关/坐标即刻生效 */
+    /** 动态开关：每次替换前查询，1 秒节流 reload */
     static boolean fakeOn() {
         if (prefs == null) return FAKE_ON;
         long now = SystemClock.elapsedRealtime();
@@ -94,7 +97,6 @@ public class MainHook implements IXposedHookLoadPackage {
         return FAKE_ON;
     }
 
-    // 微信已安装应用检测要隐藏的包名
     static final String[] HIDE_PKGS = {
             "com.lerist.fakelocation", "de.robv.android.xposed.installer",
             "org.lsposed.manager", "io.github.lsposed.manager",
@@ -150,10 +152,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         }
                     });
 
-
-
-
-            // 1b. getLastKnownLocation：替换返回值
+            // 1b. getLastKnownLocation
             XposedHelpers.findAndHookMethod(LocationManager.class, "getLastKnownLocation",
                     String.class, new XC_MethodHook() {
                         @Override
@@ -162,7 +161,7 @@ public class MainHook implements IXposedHookLoadPackage {
                         }
                     });
 
-            // 1c. getCurrentLocation 的 Consumer 回调（Android 12+ 变体）
+            // 1c. getCurrentLocation 的 Consumer 回调（Android 12+）
             XposedBridge.hookAllMethods(LocationManager.class, "getCurrentLocation",
                     new XC_MethodHook() {
                         @Override
@@ -197,22 +196,7 @@ public class MainHook implements IXposedHookLoadPackage {
                 });
             }
 
-            // 1e. FusedLocationProvider（谷歌融合定位，部分微信组件走这条）：
-            //     hook com.google.android.gms 下的 FusedLocationProviderClient
-            Class<?> fusedCls = XposedHelpers.findClassIfExists(
-                    "com.google.android.gms.location.FusedLocationProviderClient", cl);
-            if (fusedCls != null) {
-                // getLastLocation → Task<Location>：包一层 Task 代理不现实，
-                // 直接 hook OnSuccessListener 注册入口 getCurrentLocation/lastLocation.addOnSuccessListener
-                XposedBridge.hookAllMethods(fusedCls, "getLastLocation", new XC_MethodHook() {
-                    @Override
-                    protected void afterHookedMethod(MethodHookParam param) {
-                        // Task 对象无法轻易代理，此路主要靠 LocationResult 层拦截（1f）
-                    }
-                });
-            }
-
-            // 1f. LocationResult / LocationCallback 通用层（fused 回调的载体）
+            // 1e. 谷歌融合定位（有 GMS 的环境走这条；无则自动跳过）
             Class<?> resultCls = XposedHelpers.findClassIfExists(
                     "com.google.android.gms.location.LocationResult", cl);
             if (resultCls != null) {
@@ -236,21 +220,20 @@ public class MainHook implements IXposedHookLoadPackage {
                         if (fakeOn()) param.setResult(buildFake("fused"));
                     }
                 });
-            }
-            Class<?> cbCls = XposedHelpers.findClassIfExists(
-                    "com.google.android.gms.location.LocationCallback", cl);
-            if (cbCls != null) {
-                XposedBridge.hookAllMethods(cbCls, "onLocationResult", new XC_MethodHook() {
-                    @Override
-                    protected void beforeHookedMethod(MethodHookParam param) {
-                        if (!fakeOn()) return;
-                        if (param.args.length > 0 && param.args[0] != null) {
-                            Object fakeResult = XposedHelpers.callStaticMethod(resultCls,
-                                    "create", java.util.Collections.singletonList(buildFake("fused")));
-                            param.args[0] = fakeResult;
+                Class<?> cbCls = XposedHelpers.findClassIfExists(
+                        "com.google.android.gms.location.LocationCallback", cl);
+                if (cbCls != null) {
+                    XposedBridge.hookAllMethods(cbCls, "onLocationResult", new XC_MethodHook() {
+                        @Override
+                        protected void beforeHookedMethod(MethodHookParam param) {
+                            if (!fakeOn()) return;
+                            if (param.args.length > 0 && param.args[0] != null) {
+                                param.args[0] = XposedHelpers.callStaticMethod(resultCls,
+                                        "create", java.util.Collections.singletonList(buildFake("fused")));
+                            }
                         }
-                    }
-                });
+                    });
+                }
             }
             XposedBridge.log("[WxFake] system location hooked (fused=" + (resultCls != null) + ")");
         } catch (Throwable t) {
@@ -258,7 +241,6 @@ public class MainHook implements IXposedHookLoadPackage {
         }
     }
 
-    // 包装系统 LocationListener：转发前按开关决定是否替换
     private Object wrapLocationListener(final Object orig, final ClassLoader cl) {
         return Proxy.newProxyInstance(cl, new Class[]{LocationListener.class},
                 (proxy, method, args) -> {
@@ -275,7 +257,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 });
     }
 
-    // args 里所有 Location / List<Location> 参数替换为假值
     private static void replaceLocationArgs(Object[] args) {
         for (int i = 0; i < args.length; i++) {
             if (args[i] instanceof Location) {
@@ -295,7 +276,9 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // ------------------------------------------------------------------
-    // 2. 腾讯定位 SDK
+    // 2. 腾讯定位 SDK —— 核心修复：延迟捕获
+    //    微信懒加载 SDK：启动瞬间类不存在，此前 hook 只试一次就放弃。
+    //    现在挂住 ClassLoader.loadClass，首次加载 geolocation 类时立即补挂。
     // ------------------------------------------------------------------
     private void hookTencentSdk(final ClassLoader cl) {
         try {
@@ -305,11 +288,47 @@ public class MainHook implements IXposedHookLoadPackage {
                     "com.tencent.map.geolocation.TencentLocationListener", cl);
             Class<?> locCls = XposedHelpers.findClassIfExists(
                     "com.tencent.map.geolocation.TencentLocation", cl);
-            if (mgrCls == null || listenerCls == null || locCls == null) {
-                XposedBridge.log("[WxFake] TencentLocation SDK not found (system hook still active)");
+
+            if (mgrCls != null && listenerCls != null && locCls != null) {
+                hookTencentSdkClass(mgrCls, listenerCls, locCls, cl);
                 return;
             }
 
+            // 启动时类还没加载（懒加载）→ 挂 loadClass 监听，等它出现
+            XposedBridge.log("[WxFake] TencentLocation SDK not loaded yet — watching classloader");
+            XposedBridge.hookAllMethods(ClassLoader.class, "loadClass", new XC_MethodHook() {
+                boolean done = false;
+
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    if (done) return;
+                    try {
+                        String name = (String) param.args[0];
+                        if (name == null || !name.startsWith("com.tencent.map.geolocation.")) return;
+                        Class<?> first = (Class<?>) param.getResult();
+                        if (first == null) return;
+                        done = true;
+
+                        ClassLoader tcl = first.getClassLoader();
+                        Class<?> mgr = tcl.loadClass("com.tencent.map.geolocation.TencentLocationManager");
+                        Class<?> lis = tcl.loadClass("com.tencent.map.geolocation.TencentLocationListener");
+                        Class<?> loc = tcl.loadClass("com.tencent.map.geolocation.TencentLocation");
+                        hookTencentSdkClass(mgr, lis, loc, cl);
+                        XposedBridge.log("[WxFake] TencentLocation SDK hooked (deferred catch) ✓");
+                    } catch (Throwable t) {
+                        XposedBridge.log("[WxFake] deferred sdk hook failed: " + t);
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            XposedBridge.log(t);
+        }
+    }
+
+    /** SDK 三类齐全后真正挂 hook（启动命中与延迟捕获共用） */
+    private void hookTencentSdkClass(final Class<?> mgrCls, final Class<?> listenerCls,
+                                     final Class<?> locCls, final ClassLoader cl) {
+        try {
             final Object fakeTencentLoc = Proxy.newProxyInstance(cl, new Class[]{locCls},
                     (proxy, method, args) -> {
                         switch (method.getName()) {
@@ -366,18 +385,44 @@ public class MainHook implements IXposedHookLoadPackage {
                     if (fakeOn()) param.setResult(fakeTencentLoc);
                 }
             });
-            XposedBridge.log("[WxFake] TencentLocation SDK hooked");
+
+            // 单次定位变体（部分小程序走这个）
+            XposedBridge.hookAllMethods(mgrCls, "getCurrentLocation", new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam param) {
+                    for (int i = 0; i < param.args.length; i++) {
+                        if (listenerCls.isInstance(param.args[i])) {
+                            final Object orig = param.args[i];
+                            param.args[i] = Proxy.newProxyInstance(cl,
+                                    new Class[]{listenerCls},
+                                    (proxy, method, args) -> {
+                                        try {
+                                            if ("onLocationChanged".equals(method.getName())
+                                                    && args != null && args.length >= 2 && fakeOn()) {
+                                                args[0] = fakeTencentLoc;
+                                                if (args[1] instanceof Integer) args[1] = 0;
+                                            }
+                                            return method.invoke(orig, args);
+                                        } catch (Throwable t) {
+                                            return null;
+                                        }
+                                    });
+                        }
+                    }
+                }
+            });
+
+            XposedBridge.log("[WxFake] TencentLocation SDK hooked ✓");
         } catch (Throwable t) {
             XposedBridge.log(t);
         }
     }
 
     // ------------------------------------------------------------------
-    // 3. WiFi 三路（全部动态：开关关闭时透传真实值）
+    // 3. WiFi 三路
     // ------------------------------------------------------------------
     private void hookWifi(ClassLoader cl) {
         try {
-            // 3a. WifiInfo 实例 getter（SSID 返回必须带双引号）
             XposedBridge.hookAllMethods(WifiInfo.class, "getSSID", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
@@ -397,7 +442,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
             });
 
-            // 3b. Android 12+ wx.getConnectedWifi 实际走 NetworkCapabilities.getSSID()
             XposedBridge.hookAllMethods(NetworkCapabilities.class, "getSSID", new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam param) {
@@ -405,7 +449,6 @@ public class MainHook implements IXposedHookLoadPackage {
                 }
             });
 
-            // 3c. WiFi 指纹定位数据源：扫描结果 AP 列表整体替换
             XposedHelpers.findAndHookMethod(WifiManager.class, "getScanResults",
                     new XC_MethodHook() {
                         @Override
@@ -416,7 +459,7 @@ public class MainHook implements IXposedHookLoadPackage {
                             sr.BSSID = FAKE_BSSID;
                             sr.level = FAKE_RSSI;
                             sr.capabilities = FAKE_CAPS;
-                            sr.frequency = 2437; // 信道 6
+                            sr.frequency = 2437;
                             sr.timestamp = System.currentTimeMillis() * 1000;
                             List<ScanResult> fake = new ArrayList<>(1);
                             fake.add(sr);
@@ -430,7 +473,7 @@ public class MainHook implements IXposedHookLoadPackage {
     }
 
     // ------------------------------------------------------------------
-    // 4. 反检测（常开，不受开关影响）
+    // 4. 反检测（常开）
     // ------------------------------------------------------------------
     private void hookAntiDetect(ClassLoader cl) {
         try {
