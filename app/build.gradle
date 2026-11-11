@@ -1,8 +1,8 @@
-apply from: 'signing.gradle'
-
 plugins {
     id 'com.android.application'
 }
+
+apply from: 'signing.gradle'
 
 android {
     namespace 'com.example.wxfake'
