@@ -115,6 +115,113 @@ public class MainHook implements IXposedHookLoadPackage {
         hookTencentSdk(cl);
         hookWifi(cl);
         hookAntiDetect(cl);
+        hookJsBridge(cl);   // 终局兜底：小程序 JS 出口端拦截（wx.getLocation 等返回值改写）
+    }
+
+    // ------------------------------------------------------------------
+    // 5. 小程序 JS 桥出口拦截（终局方案）
+    //    不管底层定位实现走哪条路，wx.getLocation/getConnectedWifi 的结果
+    //    都以 JSON 经 JS 桥流回小程序。在桥上把字段直接改掉。
+    //    已知桥实现（按微信版本演进）：
+    //      com.tencent.mm.appbrand.bridge.AppBrandJsBridgeBridge / WXJsApiCall
+    //      com.tencent.xweb.billiard.BilliardJsBridge / APPBRAND 流量通道
+    //      org.webrtc 或 webview addJavascriptInterface 层
+    //    策略：对 processName 带 appbrand 的进程，hook 所有名为
+    //      "nativeInvokeHandler"/"invokeHandler"/"publishHandler"/"onNativeReceive"
+    //      的桥方法，扫参数文本，命中经纬度/WiFi 特征即替换。
+    // ------------------------------------------------------------------
+    private void hookJsBridge(final ClassLoader cl) {
+        // 延迟到 appbrand 进程挂（主进程没必要）
+        // 桥方法名随版本漂移 → 用「候选名列表 + findClassIfExists 探测」多路尝试
+        String[] bridgeClasses = {
+                "com.tencent.mm.appbrand.bridge.AppBrandJsBridgeBridge",
+                "com.tencent.mm.appbrand.e",
+                "com.tencent.mm.plugin.appbrand.jsapi.JsApiBridge",
+                "org.chromium.base.JavaBridge"
+        };
+        int hooked = 0;
+        for (String name : bridgeClasses) {
+            Class<?> c = XposedHelpers.findClassIfExists(name, cl);
+            if (c == null) continue;
+            hooked += hookBridgeMethods(c);
+        }
+        // 另挂 String 返回的通用 JSON 改写（兜底所有版本）
+        try {
+            Class<?> wxBridge = XposedHelpers.findClassIfExists(
+                    "com.tencent.mm.appbrand.common.c", cl);
+            if (wxBridge != null) hooked += hookBridgeMethods(wxBridge);
+        } catch (Throwable ignored) {
+        }
+        XposedBridge.log("[WxFake] js bridge hooked (classes=" + hooked + ")");
+    }
+
+    private int hookBridgeMethods(final Class<?> c) {
+        final int[] n = {0};
+        try {
+            XposedBridge.hookAllMethods(c, "nativeInvokeHandler", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    rewriteJsonArgs(param);
+                }
+            });
+            n[0]++;
+        } catch (Throwable ignored) {
+        }
+        try {
+            XposedBridge.hookAllMethods(c, "invokeHandler", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    rewriteJsonArgs(param);
+                }
+            });
+            n[0]++;
+        } catch (Throwable ignored) {
+        }
+        try {
+            XposedBridge.hookAllMethods(c, "publishHandler", new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam param) {
+                    rewriteJsonArgs(param);
+                }
+            });
+            n[0]++;
+        } catch (Throwable ignored) {
+        }
+        return n[0];
+    }
+
+    /** 扫描参数中所有 String，命中坐标/WiFi JSON 特征即改写 */
+    private static void rewriteJsonArgs(XC_MethodHook.MethodHookParam param) {
+        if (!fakeOn()) return;
+        try {
+            for (int i = 0; i < param.args.length; i++) {
+                if (param.args[i] instanceof String) {
+                    String s = (String) param.args[i];
+                    if (s.length() < 20) continue;
+                    // 定位结果特征：含 latitude+longitude 键
+                    if (s.contains("latitude") && s.contains("longitude")) {
+                        String ns = s
+                                .replaceAll("\"latitude\"\\s*:\\s*-?[0-9.]+", "\"latitude\":\"" + FAKE_LAT + "\"")
+                                .replaceAll("\"longitude\"\\s*:\\s*-?[0-9.]+", "\"longitude\":\"" + FAKE_LNG + "\"")
+                                .replaceAll("\"accuracy\"\\s*:\\s*-?[0-9.]+", "\"accuracy\":\"" + FAKE_ACC + "\"");
+                        // 逆地理相关字段一并替换（有的接口返回 address）
+                        if (ns.contains("\"address\"")) {
+                            ns = ns.replaceAll("\"address\"\\s*:\\s*\"[^\"]*\"", "\"address\":\"" + FAKE_ADDR + "\"");
+                        }
+                        if (!ns.equals(s)) param.args[i] = ns;
+                    }
+                    // WiFi 结果特征
+                    else if (s.contains("bssid") || s.contains("BSSID")) {
+                        String ns = s
+                                .replaceAll("\"SSID\"\\s*:\\s*\"[^\"]*\"", "\"SSID\":\"" + FAKE_SSID + "\"")
+                                .replaceAll("\"BSSID\"\\s*:\\s*\"[^\"]*\"", "\"BSSID\":\"" + FAKE_BSSID + "\"")
+                                .replaceAll("\"signal_strength\"\\s*:\\s*-?[0-9.]+", "\"signal_strength\":\"" + FAKE_RSSI + "\"");
+                        if (!ns.equals(s)) param.args[i] = ns;
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     // ------------------------------------------------------------------
