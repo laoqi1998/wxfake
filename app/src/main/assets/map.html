@@ -113,6 +113,11 @@ if (AMAP_KEY) {
         window._geo = new AMap.Geocoder({});
         window._search = new AMap.PlaceSearch({city:'全国', pageSize:1});
         window._loc = new AMap.Geolocation({enableHighAccuracy:true,timeout:10000});
+        // moveend 时刷新地址（拖完才查，避免请求风暴）
+        amapMap.on('moveend',function(){
+          var c=amapMap.getCenter();
+          reverseGeocode(c.getLat(), c.getLng());
+        });
         reverseGeocode(gcj[0], gcj[1]);
       });
     }catch(e){ map.style.display=''; amapReady=false; }
@@ -247,7 +252,12 @@ document.getElementById('back').onclick=function(){Android.mapPick('','');};
 document.getElementById('ok').onclick=function(){
   var c=centerGCJ();
   var a='';
-  try{ a=document.getElementById('addr').textContent.replace(/^📍 /,'').replace(/^定位地址中…$/,''); }catch(e){}
+  try{
+    a=document.getElementById('addr').textContent
+        .replace(/^📍\s*/,'')
+        .replace(/^定位地址中…$/,'')
+        .replace(/^[-0-9.,\s]+附近$/,'');
+  }catch(e){}
   Android.mapPick(c[0].toFixed(6), c[1].toFixed(6), a);
 };
 // 原生「我的位置」按钮入口：WGS84 输入 → 转 GCJ → 居中
