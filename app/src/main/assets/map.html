@@ -70,6 +70,38 @@ var z=16, cx, cy;                       // cx,cy = 当前中心的世界像素�
 (function(){var p=ll2px(gcj[0],gcj[1],z); cx=p[0]; cy=p[1];})();
 var map=document.getElementById('map'), co=document.getElementById('co');
 var tiles={};                           // key -> img
+// ---------- 高德官方 JS API 优先（用户填了 Key 时） ----------
+var AMAP_KEY=q.key||'', AMAP_SEC=q.sec||'';
+var amapReady=false, amapMap=null, amapLock=false;
+if (AMAP_KEY) {
+  window._AMapSecurityConfig = AMAP_SEC ? { securityJsCode: AMAP_SEC } : undefined;
+  var s=document.createElement('script');
+  s.src='https://webapi.amap.com/maps?v=2.0&key='+encodeURIComponent(AMAP_KEY);
+  s.onload=function(){
+    try{
+      amapMap=new AMap.Map('amap',{zoom:z,center:[gcj[1],gcj[0]],resizeEnable:true,
+        doubleClickZoom:true,dragEnable:true,zoomEnable:true});
+      amapMap.add(new AMap.Marker({position:[gcj[1],gcj[0]],title:'目标位置'}));
+      amapReady=true;
+      map.style.display='none'; document.getElementById('pin').style.display='none';
+      amapMap.on('moveend',function(){var c=amapMap.getCenter();
+        co.textContent=c.getLat().toFixed(6)+', '+c.getLng().toFixed(6);});
+    }catch(e){ map.style.display=''; amapReady=false; }
+  };
+  s.onerror=function(){ amapReady=false; map.style.display=''; };
+  document.head.appendChild(s);
+}
+// 官方地图模式下取中心坐标；否则走自研瓦片
+function centerGCJ(){
+  if(amapReady&&amapMap){var c=amapMap.getCenter();return [c.getLat(),c.getLng()];}
+  return px2ll(cx,cy,z);
+}
+// 自研渲染容器（官方模式建立后隐藏）
+var amapDiv=null;
+function ensureAmapDiv(){ if(!amapDiv){ amapDiv=document.createElement('div');
+  amapDiv.id='amap'; amapDiv.style.cssText='position:absolute;inset:0;z-index:1;';
+  map.parentNode.insertBefore(amapDiv,map);} return amapDiv; }
+if (AMAP_KEY) ensureAmapDiv();
 // ---------- 瓦片源：多源并发 + 自动切换 ----------
 // src0 高德街道 / src1 腾讯街道（GCJ 坐标系同源兼容）/ src2 高德卫星
 var SRCS=[
@@ -125,17 +157,19 @@ document.getElementById('zi').onclick=function(){z=Math.min(19,z+1);render();};
 document.getElementById('zo').onclick=function(){z=Math.max(3,z-1);render();};
 document.getElementById('back').onclick=function(){Android.mapPick('','');};
 document.getElementById('ok').onclick=function(){
-  var c=px2ll(cx,cy,z); Android.mapPick(c[0].toFixed(6), c[1].toFixed(6)); };
-// 原生「我的位置」按钮入口：WGS84 输入 → 转 GCJ → 平滑居中
+  var c=centerGCJ(); Android.mapPick(c[0].toFixed(6), c[1].toFixed(6)); };
+// 原生「我的位置」按钮入口：WGS84 输入 → 转 GCJ → 居中
 function moveTo(wgsLat, wgsLng){
   var g=wgs2gcj(wgsLat, wgsLng);
+  if(amapReady&&amapMap){ amapMap.setZoomAndCenter(16,[g[1],g[0]]); return; }
   var p=ll2px(g[0], g[1], z);
   cx=p[0]; cy=p[1];
   if(z<15){ z=16; p=ll2px(g[0], g[1], z); cx=p[0]; cy=p[1]; }
   render();
 }
 addEventListener('resize',render);
-render();
+if(!AMAP_KEY) render();   // 官方模式时自研层保持隐藏，等 onload 挂 AMap
+</script>
 </script>
 </body>
 </html>
