@@ -53,6 +53,7 @@ public class MainHook implements IXposedHookLoadPackage {
 
     static XSharedPreferences prefs;
     static long lastReload = 0;
+    static int rootFailCount = 0;
 
     private static void refreshFields() {
         FAKE_LAT   = parseD(prefs.getString("lat",   "31.2304"), FAKE_LAT);
@@ -75,23 +76,71 @@ public class MainHook implements IXposedHookLoadPackage {
             prefs = new XSharedPreferences("com.example.wxfake", "config");
             prefs.reload();
             refreshFields();
-            XposedBridge.log("[WxFake] config loaded: on=" + FAKE_ON + " " + FAKE_ADDR
+            XposedBridge.log("[WxFake] XSharedPreferences: on=" + FAKE_ON + " " + FAKE_ADDR
                     + " (" + FAKE_LAT + "," + FAKE_LNG + ") wifi=" + FAKE_SSID + "/" + FAKE_BSSID);
         } catch (Throwable t) {
-            XposedBridge.log("[WxFake] config load failed, use defaults: " + t);
+            XposedBridge.log("[WxFake] XSharedPreferences failed: " + t);
         }
     }
 
-    /** 动态开关：每次替换前查询，1 秒节流 reload */
+    /**
+     * ★ 根治读取问题：微信进程内以 root 直接 cat 模块配置文件。
+     * HyperOS/新LSPosed 的 SELinux 隔离下 XSharedPreferences 必然失效
+     * （微信进程无权进入模块 data 目录，chmod 也绕不过），
+     * 但 root su 不受此限制 —— 每次定位请求前拉一次配置，任何系统都封不掉。
+     */
+    private static void refreshConfigViaRoot() {
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{"su", "-c",
+                    "cat /data/data/com.example.wxfake/shared_prefs/config.xml"});
+            java.io.BufferedReader r = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(p.getInputStream(),
+                            java.nio.charset.StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line).append('\n');
+            r.close();
+            p.waitFor();
+
+            String xml = sb.toString();
+            if (xml.isEmpty()) { rootFailCount++; return; }
+
+            // 简易 XML 值抽取：<string name="lat">35.10</string>
+            String v;
+            if ((v = xmlVal(xml, "lat")) != null)   FAKE_LAT  = parseD(v, FAKE_LAT);
+            if ((v = xmlVal(xml, "lng")) != null)   FAKE_LNG  = parseD(v, FAKE_LNG);
+            if ((v = xmlVal(xml, "acc")) != null)   FAKE_ACC  = (float) parseD(v, FAKE_ACC);
+            if ((v = xmlVal(xml, "addr")) != null)  FAKE_ADDR = v;
+            if ((v = xmlVal(xml, "ssid")) != null)  FAKE_SSID = v;
+            if ((v = xmlVal(xml, "bssid")) != null) FAKE_BSSID = v;
+            if ((v = xmlVal(xml, "rssi")) != null)  FAKE_RSSI = (int) parseD(v, FAKE_RSSI);
+            if ((v = xmlVal(xml, "caps")) != null)  FAKE_CAPS = v;
+            if ((v = xmlVal(xml, "enabled")) != null) FAKE_ON = v.equals("true");
+        } catch (Throwable t) {
+            rootFailCount++;
+        }
+    }
+
+    private static String xmlVal(String xml, String key) {
+        java.util.regex.Matcher m = java.util.regex.Pattern
+                .compile("<string name=\"" + key + "\">([^<]*)</string>")
+                .matcher(xml);
+        return m.find() ? m.group(1) : null;
+    }
+
+    /** 动态开关：每次替换前查询，1 秒节流 —— 先走 root 直读（主力），失败再退 XSharedPreferences */
     static boolean fakeOn() {
-        if (prefs == null) return FAKE_ON;
         long now = SystemClock.elapsedRealtime();
         if (now - lastReload > 1000) {
             lastReload = now;
-            try {
-                prefs.reload();
-                refreshFields();
-            } catch (Throwable ignored) {
+            refreshConfigViaRoot();
+            // root 通道连续失败（未授权等）才退回 XSharedPreferences
+            if (rootFailCount > 3 && prefs != null) {
+                try {
+                    prefs.reload();
+                    refreshFields();
+                } catch (Throwable ignored) {
+                }
             }
         }
         return FAKE_ON;
